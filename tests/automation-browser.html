@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nawigacja UI • fixture 1.2.5</title>
+<style>body{margin:0;padding:104px 24px 80px;font:14px/1.5 system-ui;background:#1e1f22;color:#dbdee1}.fixture-header{position:fixed;top:32px;left:0;right:0;height:50px;padding-left:24px;display:flex;align-items:center;background:#17181b}main{max-width:800px;margin:auto}section.fixture-search,pre{padding:12px;background:#17181b;margin-bottom:12px;border-radius:8px}button{cursor:pointer}pre{white-space:pre-wrap}#fixture-pagination{position:fixed;bottom:0;right:0;width:400px;padding:16px;background:#17181b}</style></head><body><header class="fixture-header"># muzyka · test</header><main>
+<p>Test kontraktu klienta w przeglądarce. Syntetyczne dane i BdApi; to nie jest działający Discord.</p>
+<section class="fixture-search" data-ytlc-search><strong>Otwarta wyszukiwarka</strong><div id="fixture-page"></div><div id="fixture-messages"></div><nav id="fixture-pagination"><button rel="prev">Poprzednia strona</button><button rel="next">Następna strona</button></nav></section>
+<div id="mount"></div><pre id="test-report">Wybierz „Zbierz wszystkie strony” w panelu.</pre></main>
+<script>
+window.module={exports:{}};
+const parameters=new URLSearchParams(location.search),scenario=parameters.get("scenario")||"normal";
+const channelID="111111111111111111",guildID="222222222222222222";
+history.replaceState(null,"",`/channels/${guildID}/${channelID}?scenario=${scenario}`);
+const values=new Map(),savedFiles=new Map(),clicks=[],checks=[];
+window.require=name=>{if(name!=="fs")throw Error("Unexpected dependency");return{
+ writeFile:(path,text,options,cb)=>{savedFiles.set(path,text);cb(null);},rename:(a,b,cb)=>{savedFiles.set(b,savedFiles.get(a));savedFiles.delete(a);cb(null);},
+ unlink:(path,cb)=>{savedFiles.delete(path);cb(null);},readFile:(path,encoding,cb)=>cb(null,savedFiles.get(path)),stat:(path,cb)=>cb(null,{size:new TextEncoder().encode(savedFiles.get(path)).length})};};
+const total=scenario==="summary"?148:19,size=scenario==="summary"?25:7;
+const messages=Array.from({length:total},(_,i)=>({id:String(333333333333333333n+BigInt(i)),channel_id:channelID,content:scenario==="summary"&&i>=121?"Załączony film bez adresu YouTube":`https://youtu.be/V${String(scenario==="summary"&&i<4?i+4:i).padStart(10,"0")}`,embeds:[],author:{username:"Źródło"},timestamp:"2026-10-10T10:00:00Z"}));
+const filters={channel_id:[channelID],sort_by:"timestamp",sort_order:"asc"},props={searchContext:{type:"GUILD",guildId:guildID},search:{},messages:[],searchResultsQuery:filters,searchMode:"oldest",blockCount:0,ignoreCount:0};
+const pagination={currentPage:scenario==="normal"?2:1,pageSize:size,totalCount:total};
+const root=document.querySelector("[data-ytlc-search]"),next=root.querySelector('[rel="next"]'),prev=root.querySelector('[rel="prev"]');
+// Reproduce React's shared-child bailout: return pointers still point to the
+// old parent, while the committed root uses its alternate with fresh props.
+const staleProps={...props,search:{offset:999,totalResults:19},searchResultsQuery:{content:"old"}},oldParent={memoizedProps:staleProps},parent={memoizedProps:props},oldRoot={stateNode:{}},currentRoot={};
+oldRoot.alternate=currentRoot;currentRoot.alternate=oldRoot;currentRoot.stateNode=oldRoot.stateNode;oldRoot.stateNode.current=currentRoot;oldRoot.child=oldParent;currentRoot.child=parent;oldParent.alternate=parent;parent.alternate=oldParent;oldParent.return=oldRoot;parent.return=currentRoot;
+const fiber={memoizedProps:{},return:oldParent},buttonFiber={memoizedProps:{},return:{memoizedProps:pagination}};fiber.alternate={memoizedProps:{},return:oldParent};fiber.alternate.alternate=fiber;oldParent.child=parent.child=fiber;
+const realm=document.createElement("iframe");realm.hidden=true;document.body.append(realm);props.searchResultsQuery=realm.contentWindow.JSON.parse(JSON.stringify(filters));
+let offset=(pagination.currentPage-1)*size,loading=false;
+function show(page,partial=false,stale=false){pagination.currentPage=page+1;offset=page*size;loading=partial;props.search={offset,totalResults:partial?0:total,isSearching:partial};if(!stale)props.messages=messages.slice(offset,offset+(partial?2:size));next.disabled=page===Math.ceil(total/size)-1;prev.disabled=page===0;
+ document.getElementById("fixture-page").textContent=`${page+1}/${Math.ceil(total/size)}${partial?" • ładowanie":""}`;
+ document.getElementById("fixture-messages").replaceChildren(...props.messages.map(m=>{const d=document.createElement("div");d.id=`message-content-${m.id}`;d.textContent=m.content;return d;}));}
+show(pagination.currentPage-1);
+root.append(Object.assign(document.createElement("div"),{className:"embed loading_spinnerWrapper"}));root.lastChild.setAttribute("aria-busy","true");root.lastChild.setAttribute("role","progressbar");
+const stores={SelectedChannelStore:{getChannelId:()=>channelID},ChannelStore:{getChannel:()=>({id:channelID,guild_id:guildID,name:"muzyka",type:0})},GuildStore:{getGuild:()=>({name:"Serwer testowy"})},PermissionStore:{can:()=>true},MessageStore:{getMessages:()=>({_array:[]})},SearchQueryStore:{getSearchResultsQueryString:()=>"in:muzyka youtube.com",getSearchResultsQuery:()=>filters,getSearchResultsOffset:()=>offset,getSearchMode:()=>"oldest"},SelectedSearchContextStore:{getSelectedSearchContext:()=>props.searchContext},SearchMessageStore:{getIsFetching:()=>loading,getIsIndexing:()=>false,getIsHistoricalIndexing:()=>true,getTotalCount:()=>loading?0:total,getMessage:id=>messages.find(m=>m.id===id)}};
+window.BdApi=class{constructor(name){this.Data={load:key=>structuredClone(values.get(key)),save:(key,value)=>values.set(key,structuredClone(value)),delete:key=>values.delete(key)};this.Webpack={getStore:name=>stores[name]};this.ReactUtils={getInternalInstance:element=>element===root?fiber:buttonFiber};this.DOM={addStyle:css=>{const style=document.createElement("style");style.id=name;style.textContent=css;document.head.append(style);},removeStyle:()=>document.getElementById(name)?.remove()};this.UI={showToast:()=>{},showConfirmationModal:(title,text,options)=>options.onConfirm(),openDialog:async options=>({canceled:false,filePath:`/memory/automatic.${options.filters[0].extensions[0]}`})};}};
+</script><script src="/plugin.js"></script><script>
+const Plugin=module.exports,plugin=new Plugin();plugin.start();plugin.selectChannel();plugin.collection.state.config.pageDelayMinSeconds=0;plugin.collection.state.config.pageDelayMaxSeconds=0;document.getElementById("mount").append(plugin.getSettingsPanel());
+if(scenario==="summary"){plugin.collection.fail(Error("Wyniki zmieniły się przed kliknięciem. Nie wykonano przejścia."));plugin.collection.interrupt();plugin.renderSoon();}
+if(scenario==="summary"){
+ const controls=document.createElement("p");controls.id="summary-controls";
+ for(const [text,action] of [["Testuj bieżący błąd",()=>plugin.collection.fail(Error("Test bieżącego błędu"))],["Odtwórz zapis w teście",()=>{plugin.collection=new Plugin.Core.Persistence(plugin.api.Data).load();plugin.autoFinished=false;} ]]){
+  const control=document.createElement("button");control.textContent=text;control.addEventListener("click",()=>{if(plugin.running)return;action();plugin.renderSoon();});controls.append(control);
+ }
+ document.getElementById("test-report").after(controls);
+}
+function check(name,condition){if(!condition)throw Error(name);checks.push(`PASS ${name}`);}
+for(const [button,direction] of [[next,"next"],[prev,"prev"]])button.addEventListener("click",()=>{
+ const pointer=values.get("checkpoint"),checkpoint=JSON.parse(values.get("state-"+pointer.slot).payload),scope=checkpoint.searchTracking.scopes.find(s=>s.key===checkpoint.searchTracking.activeKey);
+ check("Zapis przetworzonej strony przed istniejącą akcją UI",scope.pages.some(p=>p.number===pagination.currentPage&&p.status==="processed"));
+ check("Zapis kierunku i oczekiwanej strony",scope.navigation.direction===direction&&scope.navigation.expectedPage===pagination.currentPage+(direction==="next"?1:-1));
+ clicks.push(direction);const page=pagination.currentPage+(direction==="next"?0:-2);
+ if(scenario==="timeout"){show(page,false,true);return;}
+ show(page,true);setTimeout(()=>show(page,false),scenario==="stop"?5000:400);
+});
+let started=false,done=false,stoppedAt=null;
+const report=document.getElementById("test-report");
+const monitor=setInterval(()=>{try{
+ if(plugin.running)started=true;
+ if(!started||done)return;
+ report.textContent=`Scenariusz: ${scenario}\nKliknięcia: ${clicks.join(", ")||"brak"}\nStan: ${plugin.collection.state.status}\nLinki: ${plugin.collection.records.size}\n${scenario==="stop"?"Po pierwszym kliknięciu wybierz Stop.":"Oczekiwanie na wynik testu…"}`;
+ if(scenario==="normal"&&plugin.autoFinished&&savedFiles.has("/memory/automatic.txt")){
+  check("Przewinięcie do początku i przejście do końca",clicks.join(",")==="prev,next,next");
+  check("Bailout React i filtry z iframe pozostają zgodne",plugin.adapter.searchDiagnostics.coherent===true&&plugin.adapter.searchDiagnostics.coherenceReason===null);
+  check("Wszystkie 19 wystąpień bez dubli od powrotu",plugin.collection.records.size===19);
+  check("Wszystkie trzy strony przetworzone",new Plugin.Core.SearchTracker(plugin.collection).summary().processed===3);
+  check("Automatyczny TXT obejmuje pełną kolekcję",savedFiles.get("/memory/automatic.txt").trim().split("\r\n").length===19);
+  check("Koniec zatrzymuje nawigację",!plugin.running&&!plugin.navigator);
+  check("Pełna historia nie jest deklarowana",plugin.collection.state.completeness.status!=="complete");done=true;
+ }else if(scenario==="summary"&&plugin.autoFinished&&savedFiles.has("/memory/automatic.txt")&&!plugin.renderTimer){
+  const panel=[...plugin.panels][0],a=new Plugin.Core.SearchTracker(plugin.collection).accounting();
+  check("148/148 wiadomości, 121 z linkami i 27 bez linków",a.read===148&&a.withLinks===121&&a.withoutLinks===27&&a.unverified===0&&a.allPages);
+  check("121 wystąpień i 117 unikalnych zasobów",plugin.collection.records.size===121&&plugin.collection.resources.size===117);
+  check("Wszystkie sześć stron i pięć istniejących kliknięć",clicks.join(",")==="next,next,next,next,next");
+  check("Ukończenie wyszukiwania pokazane jako sukces",panel.status.textContent==="Odczyt wyszukiwania zakończony"&&panel.status.dataset.searchFinished==="true");
+  check("Wiadomości bez linków wyjaśnione jako sprawdzone",panel.accountingNote.textContent.includes("nie są pominiętymi wynikami"));
+  check("Historia błędów oddzielona od bieżącego błędu",panel.notes.querySelector("details summary").textContent.includes("Historia wcześniejszych błędów")&&!panel.notes.querySelector(".ytlc-error"));
+  check("Eksport nadal ma niepotwierdzoną pełną historię",plugin.collection.state.completeness.status!=="complete"&&panel.historyNote.textContent.includes("INCOMPLETE"));
+  check("Zachowana historia błędów w checkpointcie",new Plugin.Core.Persistence(plugin.api.Data).load().state.errors.length===1);
+  done=true;
+ }else if(scenario==="delay-stop"&&!plugin.running&&plugin.collection.records.size){
+  check("Stop podczas 30 s przerwy nie klika przycisku strony",clicks.length===0);
+  check("Przerwa i timer odliczania anulowane",!plugin.navigationDelay&&!plugin.busy);
+  check("Checkpoint zachowuje siedem linków",JSON.parse(values.get("state-"+values.get("checkpoint").slot).payload).records.length===7);
+  check("Zakres 30–30 s zapisany",JSON.parse(values.get("state-"+values.get("checkpoint").slot).payload).config.pageDelayMinSeconds===30&&plugin.collection.state.config.pageDelayMaxSeconds===30);
+  done=true;
+ }else if(scenario==="stop"&&!plugin.running&&clicks.length){
+  if(stoppedAt===null)stoppedAt=Date.now();if(Date.now()-stoppedAt>7000){check("Stop pozostaje zatrzymany mimo opóźnionych wyników",clicks.length===1&&!plugin.navigator);check("Checkpoint Stop zachowuje zebrane linki",new Plugin.Core.Persistence(plugin.api.Data).load().records.size>=7);done=true;}
+ }else if(scenario==="timeout"&&plugin.collection.state.status==="failed"){
+  check("Stare ID pod nowym numerem kończą się timeoutem",clicks.length===1&&!plugin.running);check("Timeout zachowuje linki",plugin.collection.records.size===7);check("Timeout nie uruchamia końcowego eksportu",!savedFiles.has("/memory/automatic.txt"));done=true;
+ }
+ if(done){clearInterval(monitor);report.textContent=`AUTOMATION BROWSER ${scenario}: ${checks.length}/${checks.length} PASS\n${checks.join("\n")}`;report.dataset.result="pass";}
+ }catch(error){clearInterval(monitor);report.dataset.result="fail";report.textContent=`FAIL: ${error.stack}`;}},200);
+</script></body></html>

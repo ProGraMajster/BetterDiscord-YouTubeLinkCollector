@@ -1,0 +1,27 @@
+{
+  "name": "youtube-link-collector",
+  "version": "1.2.5",
+  "author": "ProGraMajster",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ProGraMajster/BetterDiscord-YouTubeLinkCollector.git"
+  },
+  "homepage": "https://github.com/ProGraMajster/BetterDiscord-YouTubeLinkCollector",
+  "bugs": "https://github.com/ProGraMajster/BetterDiscord-YouTubeLinkCollector/issues",
+  "release": {"prerelease": true},
+  "private": true,
+  "description": "BetterDiscord YouTube collector with existing search UI pagination, checkpoints, recovery and full exports",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.cjs tests/*.test.mjs",
+    "check": "node tools/check.mjs",
+    "bot": "node tools/collect-channel.mjs",
+    "preview": "node tools/preview.mjs",
+    "release:manifest": "node tools/release.mjs --manifest",
+    "release:check": "node tools/release.mjs --check",
+    "release:package": "node tools/release.mjs --package"
+  }
+}

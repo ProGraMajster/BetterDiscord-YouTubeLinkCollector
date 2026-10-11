@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kolektor • fixture testowa</title>
+<style>body{margin:0;padding:28px;font:14px/1.5 system-ui;background:#1e1f22;color:#dbdee1}main{max-width:760px;margin:auto}#fixture-note{color:#b5bac1;margin-bottom:16px}#test-report{white-space:pre-wrap;padding:12px;border-radius:8px;background:#17181b}a{color:#00a8fc}</style></head><body><main>
+<div id="fixture-note">Fixture przeglądarkowa. Dane i BdApi są atrapami; to nie jest test w Discordzie.</div><div id="mount"></div><pre id="test-report">Sprawdzanie…</pre></main>
+<script>
+window.module = {exports: {}};
+window.savedFiles = new Map();
+window.require = name => { if (name !== "fs") throw new Error("Unexpected dependency"); return {
+    writeFile: (path,text,options,callback) => { savedFiles.set(path,text); callback(null); },
+    rename: (from,to,callback) => { savedFiles.set(to,savedFiles.get(from)); savedFiles.delete(from); callback(null); }, unlink: (path,callback) => { savedFiles.delete(path); callback(null); },
+    readFile: (path,encoding,callback) => callback(null,savedFiles.get(path)), stat: (path,callback) => callback(null,{size: new TextEncoder().encode(savedFiles.get(path)).length})}; };
+window.fixtureToasts = []; window.fixtureDialog = "normal";
+const channelID = "111111111111111111", guildID = "222222222222222222";
+const fixtureLarge = new URLSearchParams(location.search).has("large");
+const seedMessages = Array.from({length: fixtureLarge ? 6600 : 260}, (_, index) => ({id: String(333333333333333333n + BigInt(index)), channel_id: channelID, content: `https://youtu.be/V${String(Math.floor(index / 2)).padStart(10,"0")}`, embeds: [], author: {username: index === 0 ? "=1+1" : "TestUser"}, timestamp: "2026-10-09T12:00:00Z"}));
+const values = new Map();
+const stores = {SelectedChannelStore: {getChannelId: () => channelID}, ChannelStore: {getChannel: () => ({id: channelID, guild_id: guildID, name: "muzyka", type: 0})}, GuildStore: {getGuild: () => ({name: "Serwer społeczności"})}, PermissionStore: {can: () => true}, MessageStore: {getMessages: () => ({_array: seedMessages}), getMessage: (channel,id) => seedMessages.find(x => x.id === id && x.channel_id === channel)}};
+window.BdApi = class {
+    constructor(name) {
+        this.Data = {load: key => structuredClone(values.get(key)), save: (key, value) => values.set(key, structuredClone(value)), delete: key => values.delete(key)};
+        this.Webpack = {getStore: name => stores[name]};
+        this.DOM = {addStyle: css => { const style = document.createElement("style"); style.id = name; style.textContent = css; document.head.append(style); }, removeStyle: () => document.getElementById(name)?.remove()};
+        this.UI = {showToast: (message,options) => fixtureToasts.push({message,...options}), showConfirmationModal: (title,text,options) => options.onConfirm(), openDialog: async options => fixtureDialog === "cancel" ? {canceled:true} : options.mode === "save" ? {canceled: false, filePath: `/memory/export.${options.filters[0].extensions[0]}`} : {canceled: false, filePaths: ["/memory/export.json"]}};
+    }
+};
+</script><script src="/plugin.js"></script><script>
+const Plugin = module.exports;
+window.fixturePlugin = new Plugin();
+fixturePlugin.start();
+// Replace route detection only in this isolated fixture; real plugin requires a Discord route.
+fixturePlugin.adapter.location = {pathname: `/channels/${guildID}/${channelID}`};
+fixturePlugin.collection = new Plugin.Core.Collection({channelID, serverID: guildID, channelName:"muzyka", serverName:"Serwer społeczności"});
+fixturePlugin.collection.begin(); for (const message of seedMessages) fixturePlugin.collection.process(message);
+fixturePlugin.collection.interrupt();
+document.getElementById("mount").append(fixturePlugin.getSettingsPanel());
+const wait = ms => new Promise(resolve => setTimeout(resolve,ms));
+async function run() {
+    const results = [], root = document.querySelector(".ytlc");
+    const check = (name, condition) => { if (!condition) throw new Error(name); results.push(`PASS ${name}`); };
+    const panel = [...fixturePlugin.panels][0];
+    check("Polski panel i wskazany kanał", root.textContent.includes("YouTube Link Collector") && panel.channel.textContent.includes("muzyka"));
+    check("Statystyki 260/130/130", panel.stats.occurrences.textContent === "260" && panel.stats.unique.textContent === "130" && panel.stats.duplicates.textContent === "130");
+    check("Lista ograniczona do 100 wierszy", panel.results.querySelectorAll(".ytlc-result").length === 100);
+    panel.next.click(); check("Druga strona zawiera 30 wierszy", panel.results.querySelectorAll(".ytlc-result").length === 30);
+    panel.search.value = "V0000000000"; panel.search.dispatchEvent(new Event("input",{bubbles:true}));
+    check("Wyszukiwanie zasobu", panel.results.querySelectorAll(".ytlc-result").length === 1);
+    panel.mode.value = "all"; panel.mode.dispatchEvent(new Event("change",{bubbles:true})); await wait(220);
+    check("Zmiana trybu bez utraty danych", panel.results.querySelectorAll(".ytlc-result").length === 2 && fixturePlugin.collection.records.size === 260);
+    const urls = [...root.querySelectorAll("a")]; check("Bezpieczne linki", urls.every(x => x.target === "_blank" && x.rel.includes("noopener")));
+    await fixturePlugin.export("csv"); check("Eksport CSV i ochrona formuł", savedFiles.get("/memory/export.csv").includes('"\'=1+1"'));
+    await fixturePlugin.export("txt"); check("TXT zachowuje 260 wystąpień", savedFiles.get("/memory/export.txt").trim().split("\r\n").length === 260);
+    await fixturePlugin.export("json"); check("JSON obejmuje pełną kolekcję mimo filtra", JSON.parse(savedFiles.get("/memory/export.json")).totalOccurrences === 260);
+    await fixturePlugin.importJSON(); await wait(220); check("Import JSON odtwarza dane", fixturePlugin.collection.records.size === 260);
+    fixturePlugin.openWindow(); check("Okno kolekcji jest dostępne", !!document.querySelector(".ytlc-window[role=dialog]"));
+    fixturePlugin.window.querySelector("button").click(); check("Zamknięcie okna zachowuje dane", !document.querySelector(".ytlc-window") && fixturePlugin.collection.records.size === 260);
+    panel.search.value = ""; panel.search.dispatchEvent(new Event("input",{bubbles:true}));
+    panel.mode.value = "unique"; panel.mode.dispatchEvent(new Event("change",{bubbles:true})); await wait(220);
+    check("Sekcja skanowania i bezpieczny Start", root.textContent.includes("Historia skanowania") && panel.start.textContent === "Wznów odczyt");
+    const beforeCancel = savedFiles.get("/memory/export.json"), toastCount = fixtureToasts.length;
+    fixtureDialog = "cancel"; await fixturePlugin.export("json"); fixtureDialog = "normal";
+    check("Anulowanie eksportu bez błędu i bez zapisu", savedFiles.get("/memory/export.json") === beforeCancel && fixtureToasts.length === toastCount);
+    const originalCopy = fixturePlugin.copyText; let copied = ""; fixturePlugin.copyText = async text => { copied = text; return true; };
+    panel.results.querySelector("button").click(); await wait(20); check("Kopiowanie pojedynczego linku", copied === "https://www.youtube.com/watch?v=V0000000000");
+    panel.copyVisible.click(); await wait(20); check("Kopiowanie wyświetlonych 100 linków", copied.split("\r\n").length === 100);
+    fixturePlugin.copyText = originalCopy;
+    const testScope = Plugin.Core.searchScope(fixturePlugin.collection.state.selection,"in:muzyka youtube.com from:MEE6",{author_id:["MEE6"]},"timestamp/asc");
+    let searchPage;
+    fixturePlugin.adapter.inspectSearch = () => searchPage;
+    fixturePlugin.running = true; fixturePlugin.collection.begin();
+    for (const number of [1,2,5]) {
+        searchPage = {scope:testScope,pageNumber:number,pageKey:`page:${number}`,reportedTotal:2554,totalPages:null,loaded:true,fullPage:true,messages:seedMessages.slice(number*25,number*25+25),source:"client-results"};
+        await fixturePlugin.read(); await wait(1000); await fixturePlugin.read();
+    }
+    fixturePlugin.renderPanel(panel);
+    check("Strony 1,2,5: trzy odczyty i luka 3–4", panel.scanning.textContent.includes("odczytane: 3") && panel.coverage.textContent.includes("3–4"));
+    check("Ostrzeżenie autora i brak youtu.be", panel.coverage.textContent.includes("autora") && panel.coverage.textContent.includes("youtu.be"));
+    await fixturePlugin.read(); check("Ponowna strona nie zwiększa postępu", new Plugin.Core.SearchTracker(fixturePlugin.collection).summary().processed === 3);
+    fixturePlugin.pauseCollection(); fixturePlugin.renderPanel(panel); check("Pauza zachowuje 260 rekordów", !fixturePlugin.running && fixturePlugin.collection.records.size === 260 && panel.status.textContent.startsWith("Pauza"));
+    await fixturePlugin.configureBackup(); check("Kopia wymaga wyboru pliku i udanego zapisu", !!fixturePlugin.backupPath && JSON.parse(savedFiles.get("/memory/export.json")).searchTracking.scopes.length === 1);
+    fixturePlugin.disableBackup(); check("Wyłączenie kopii sprząta timer", !fixturePlugin.backupPath);
+    const oldDialog = fixturePlugin.api.UI.openDialog, oldDownload = fixturePlugin.downloadExport, oldClipboard = fixturePlugin.copyText;
+    fixturePlugin.api.UI.openDialog = undefined; fixturePlugin.downloadExport = () => false; fixturePlugin.copyText = async () => false;
+    await fixturePlugin.export("json"); fixturePlugin.renderPanel(panel);
+    check("Brak dialogu: pełny JSON dostępny do ręcznego kopiowania", JSON.parse(panel.exportText.value).occurrences.length === 260);
+    fixturePlugin.api.UI.openDialog = oldDialog; fixturePlugin.downloadExport = oldDownload; fixturePlugin.copyText = oldClipboard;
+    document.getElementById("test-report").textContent = `BROWSER CHECKS: ${results.length}/${results.length} PASS\n${results.join("\n")}`;
+    document.getElementById("test-report").dataset.result = "pass";
+    window.fixtureResults = {passed: results.length, failed: 0};
+}
+async function runLarge() {
+    const results=[], panel=[...fixturePlugin.panels][0];
+    const check=(name,condition)=>{if(!condition) throw Error(name); results.push(`PASS ${name}`);};
+    check("6600 wystąpień / 3300 zasobów", fixturePlugin.collection.records.size===6600 && fixturePlugin.collection.resources.size===3300);
+    check("DOM dużej kolekcji: najwyżej 100 wierszy", panel.results.querySelectorAll(".ytlc-result").length===100);
+    panel.next.click(); check("Nawigacja dużej listy", panel.results.querySelectorAll(".ytlc-result").length===100 && panel.page===1);
+    panel.search.value="V0000003299"; panel.search.dispatchEvent(new Event("input",{bubbles:true}));
+    check("Filtrowanie 3300 zasobów", panel.results.querySelectorAll(".ytlc-result").length===1);
+    for (const format of ["txt","csv","json"]) {
+        await fixturePlugin.export(format); const text=savedFiles.get(`/memory/export.${format}`);
+        check(`Eksport ${format}: wszystkie 3300 zasobów mimo filtra`, format==="json" ? JSON.parse(text).records.length===3300 && JSON.parse(text).occurrences.length===6600 : text.trim().split("\r\n").length-(format==="csv"?1:0)===3300);
+    }
+    await fixturePlugin.importJSON(); check("Import 6600 wystąpień", fixturePlugin.collection.records.size===6600);
+    panel.search.value=""; panel.search.dispatchEvent(new Event("input",{bubbles:true}));
+    document.getElementById("test-report").textContent=`LARGE BROWSER CHECKS: ${results.length}/${results.length} PASS\n${results.join("\n")}`;
+    document.getElementById("test-report").dataset.result="pass";
+}
+(fixtureLarge ? runLarge() : run()).catch(error => { document.getElementById("test-report").textContent = `FAIL: ${error.stack}`; document.getElementById("test-report").dataset.result = "fail"; });
+</script></body></html>

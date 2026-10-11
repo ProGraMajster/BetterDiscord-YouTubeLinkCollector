@@ -1,0 +1,36 @@
+# User data and credentials
+.env
+.env.*
+!.env.example
+*.config.json
+*.csv
+*checkpoint*.json
+exports/
+backups/
+private-audit/
+work/
+Cache/
+Cache_Data/
+client-assets/
+*.asar
+*.log
+*.tmp
+*.lock
+*.bak
+# Dependencies, packages and local editor state
+node_modules/
+artifacts/
+*.zip
+*.zip.sha256
+.codex/
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+# Superseded synthetic screenshots kept locally, outside the public distribution
+docs/PANEL-FIXTURE.jpg
+docs/PANEL-1.1.0.png
+docs/PANEL-1.2.0.png
+docs/PANEL-1.2.1.png
+docs/PANEL-1.2.2.png
+docs/PANEL-1.2.4.png

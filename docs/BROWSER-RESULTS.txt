@@ -1,0 +1,39 @@
+YouTube Link Collector 1.2.5 — ProGraMajster
+Date: 2026-10-10T18:06:38.616Z
+Synthetic BdApi/Discord contracts; not a logged-in Discord client.
+Summary scenario uses 0–0 s pacing for the test; existing pacing behavior is unchanged.
+Six pages, 148 messages: 121 with YouTube links, 27 without; 117 unique resources and 4 repeats.
+
+AUTOMATION BROWSER summary: 18/18 PASS
+PASS Zapis przetworzonej strony przed istniejącą akcją UI
+PASS Zapis kierunku i oczekiwanej strony
+PASS Zapis przetworzonej strony przed istniejącą akcją UI
+PASS Zapis kierunku i oczekiwanej strony
+PASS Zapis przetworzonej strony przed istniejącą akcją UI
+PASS Zapis kierunku i oczekiwanej strony
+PASS Zapis przetworzonej strony przed istniejącą akcją UI
+PASS Zapis kierunku i oczekiwanej strony
+PASS Zapis przetworzonej strony przed istniejącą akcją UI
+PASS Zapis kierunku i oczekiwanej strony
+PASS 148/148 wiadomości, 121 z linkami i 27 bez linków
+PASS 121 wystąpień i 117 unikalnych zasobów
+PASS Wszystkie sześć stron i pięć istniejących kliknięć
+PASS Ukończenie wyszukiwania pokazane jako sukces
+PASS Wiadomości bez linków wyjaśnione jako sprawdzone
+PASS Historia błędów oddzielona od bieżącego błędu
+PASS Eksport nadal ma niepotwierdzoną pełną historię
+PASS Zachowana historia błędów w checkpointcie
+
+Additional browser interactions verified through the actual controls:
+PASS Current error: main status Błąd kolekcji and current reason visible.
+PASS Restore checkpoint with autoFinished cleared: finished status and 148/121/27 restored.
+PASS Existing error remains in collapsed Historia wcześniejszych błędów (1), no current error.
+PASS Actual pointer drag: x=581 -> 209, y=62.40625 -> 52.40625; capture released.
+PASS ArrowRight: x=209 -> 229; close/open retains x=229 and y=52.40625.
+PASS Narrow default viewport drag: x=8, y=121.609375; ArrowUp -> y=101.609375.
+PASS Resize 480x360: header reachable, right=468, bottom=352; no horizontal overflow. Override reset.
+PASS Shift+ArrowUp -> y=51.609375; close/open retains x=8 and y=51.609375, scrollTop=0.
+PASS Header stays visible while scrolling to diagnostics.
+
+Native Discord 1.2.5 UI: NOT EXECUTED — environment unavailable.
+Native 1.2.4 evidence: user screenshots and read-only checkpoint inspection confirm 6/6 pages, 148 checked messages, 121 occurrences, 117 unique, 4 repeats, 27 without recognized YouTube links.

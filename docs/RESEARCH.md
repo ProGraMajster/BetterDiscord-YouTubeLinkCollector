@@ -1,0 +1,18 @@
+# Źródła i decyzje 1.2.0 — 2026-10-10
+
+Autor projektu: ProGraMajster.
+
+Najważniejszym materiałem dla nowego adaptera jest **rzeczywisty kod statycznych zasobów lokalnego Discorda**, nie hipotetyczne CSS. Hash, moduły, kontrakty, odtworzenie rzeczywistego SearchQueryStore offline i granica kwalifikacji są w CLIENT-AUDIT.md. Cache ma wiele generacji; nie potwierdza zamontowanego buildu. Brak narzędzia sterującego natywnym oknem uniemożliwił test na zalogowanym kliencie.
+
+| Źródło pierwotne | Użycie |
+| --- | --- |
+| [BdApi Webpack](https://docs.betterdiscord.app/api/Webpack), [ReactUtils](https://docs.betterdiscord.app/api/ReactUtils) | Odczyt stores i fiber; stores/props Discorda pozostają nietrwałe. Referencja [Data Stores](https://docs.betterdiscord.app/discord/modules/data-stores) opisuje dawne SearchStore i nie wystarcza dla SearchQueryStore. |
+| [BdApi Data](https://docs.betterdiscord.app/api/Data), [UI](https://docs.betterdiscord.app/api/UI) | Przestrzeń wtyczki i kontrolowany zapis/odczyt, natywny dialog eksportu. Readback nie jest fizycznym flush. |
+| [BetterDiscord fs źródło audytowane w 1.1.0](https://github.com/BetterDiscord/BetterDiscord/blob/133bc83b6bae998a321615a77e15b94956265d12/src/betterdiscord/polyfill/fs.ts), [require](https://github.com/BetterDiscord/BetterDiscord/blob/133bc83b6bae998a321615a77e15b94956265d12/src/betterdiscord/polyfill/index.ts) | fs callback bez promises/open. W 1.2.0 wykrywane są możliwości, nie zakładana wersja. Testy callback wykonują rzeczywiste zapisy na Windows. |
+| [BetterDiscord JsonStore](https://github.com/BetterDiscord/BetterDiscord/blob/133bc83b6bae998a321615a77e15b94956265d12/src/betterdiscord/stores/json.ts) | Uszkodzony JSON może dać pusty cache; ochronny odczyt wyłącznie własnej konfiguracji blokuje niejawny pusty zapis. |
+| [Wyszukiwanie Discorda](https://support.discord.com/hc/en-us/articles/115000468588-How-to-Use-Search-on-Discord) | Istniejące filtry/sortowanie/UI; kwerendy domen prowadzone osobno, brak dowodu pełnej historii z indeksu. |
+| [Automated User Accounts](https://support.discord.com/hc/en-us/articles/115002192352-Automated-User-Accounts-Self-Bots), [Platform Manipulation Policy](https://discord.com/safety/platform-manipulation-policy-explainer) | Zweryfikowano aktualne publikacje. Automatyzacja zwykłych kont poza bot/OAuth2 i modyfikacje klienta objęte zakazem. Sam brak REST/tokena nie ustanawia zgody platformy na UI automation. |
+| [Discord Message Resource](https://docs.discord.com/developers/resources/message), [Permissions](https://docs.discord.com/developers/topics/permissions), [Rate Limits](https://docs.discord.com/developers/topics/rate-limits), [Application](https://docs.discord.com/developers/resources/application) | Dotychczasowe osobne narzędzie zarejestrowanego bota: oficjalna historia/before, efektywne uprawnienia i dostęp do treści, bounded retry i 429. Plugin nie korzysta z tego transportu. |
+| [Electron dialog](https://www.electronjs.org/docs/latest/api/dialog), [DownloadItem](https://www.electronjs.org/docs/latest/api/download-item) | canceled/filePath i semantyka końca pobrania. Blob w rendererze nie ma stabilnego potwierdzenia DownloadItem.done. |
+
+Po najnowszej instrukcji użytkownika wdrożono konkretną standardową interakcję istniejącego UI z weryfikacją rezultatu. Ogólne zastrzeżenie platformy nie zastąpiło analizy technicznej ani działającej implementacji. Nie deklarujemy jednak zgodności BetterDiscord/automatyzacji z zasadami Discorda. Nie wdrożono direct private requests, user tokenów, action creatorów, self-bota ani obchodzenia rate-limitów.
