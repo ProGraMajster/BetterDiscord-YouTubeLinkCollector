@@ -1,6 +1,6 @@
 {
   "name": "youtube-link-collector",
-  "version": "1.2.5",
+  "version": "1.2.7",
   "author": "ProGraMajster",
   "license": "MIT",
   "repository": {
@@ -22,6 +22,7 @@
     "preview": "node tools/preview.mjs",
     "release:manifest": "node tools/release.mjs --manifest",
     "release:check": "node tools/release.mjs --check",
-    "release:package": "node tools/release.mjs --package"
+    "release:package": "node tools/release.mjs --package",
+    "doctor": "node tools/live-diagnostics.mjs"
   }
 }

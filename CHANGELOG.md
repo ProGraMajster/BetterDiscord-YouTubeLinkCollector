@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.7 — 2026-10-17
+
+- Author: ProGraMajster. Prerelease.
+- Fixed a live-client 24/25 stall: complete search hits from other channels are qualified and counted separately, without importing foreign links or falsely marking them missing/linkless. Pages with only foreign hits also advance; genuinely unavailable hits still block.
+- Optional excluded-ID page evidence is validated, budgeted and preserved in schema-1 checkpoints and JSON. Current-channel export behavior is retained.
+- Fixed frozen progress after disable/enable: cancelled refresh handles no longer block future UI updates on the same plugin instance. Detached settings views retain registration; a render failure is isolated and keeps Stop available.
+- Redesigned the panel with four tabs, fixed controls/export, a single scroll area, clear current-page counts and keyboard tab navigation.
+- Real-client diagnostics and user confirmation verified page 6→7, subsequent forward collection and live UI refresh. Added native-shaped regressions and same-instance lifecycle replay.
+
+## 1.2.6 — 2026-10-16
+
+- Author: ProGraMajster. Local prerelease candidate; no automatic GitHub publication.
+- Resume preserves automatic mode/export format, rereads the currently open page, and advances forward after errors, Pause, Stop, or restart. Rewind is a separate confirmed action. Schema 1 remains compatible.
+- Clear main actions, visible channel selection, page progress, phase/status, last-check/progress ages, heartbeat clock, and cancellable pacing countdown. Manual reading is explicitly separate.
+- Independent page-load timeout defaults to 90 seconds, configurable from 15 to 300 seconds. Same-page changes before clicking trigger bounded rechecks; delivered clicks are never retried automatically.
+- Exact-ID recovery from complete client-store messages or committed mounted message props; unresolved results still block page completion.
+- Optional expiring read-only local diagnostic connection, sanitized copyable reports, no network listener, credentials, conversation data, or command execution.
+- Preserved TXT/CSV/JSON exports, checkpoint recovery and registered-bot compatibility through 1.2.5.
+
 ## 1.2.5 — 2026-10-10
 
 - Author: ProGraMajster.

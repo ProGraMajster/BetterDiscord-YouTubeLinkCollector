@@ -97,7 +97,7 @@ export async function readCheckpoint(file) {
     const saved = JSON.parse(text);
     const collection = Collection.restore(saved.collection);
     const bot = saved.bot;
-    if (!["1.0.0", "1.1.0", "1.2.0", "1.2.1", "1.2.2", "1.2.3", "1.2.4", VERSION].includes(saved.toolVersion) || !bot || !validId(bot.botID) || !validId(bot.applicationID) || typeof bot.reachedEnd !== "boolean" || !(bot.snapshotUpperMessageID === null || validId(bot.snapshotUpperMessageID)) || !(bot.before === null || validId(bot.before))) throw new Error("Invalid bot checkpoint.");
+    if (!["1.0.0", "1.1.0", "1.2.0", "1.2.1", "1.2.2", "1.2.3", "1.2.4", "1.2.5", "1.2.6", VERSION].includes(saved.toolVersion) || !bot || !validId(bot.botID) || !validId(bot.applicationID) || typeof bot.reachedEnd !== "boolean" || !(bot.snapshotUpperMessageID === null || validId(bot.snapshotUpperMessageID)) || !(bot.before === null || validId(bot.before))) throw new Error("Invalid bot checkpoint.");
     if (bot.before !== collection.state.checkpoint.before || (bot.before && (!bot.snapshotUpperMessageID || BigInt(bot.before) > BigInt(bot.snapshotUpperMessageID))) || (bot.reachedEnd && collection.state.status !== "complete") || (collection.state.status === "complete" && !bot.reachedEnd)) throw new Error("Inconsistent bot checkpoint.");
     return {collection, bot};
 }

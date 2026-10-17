@@ -2,16 +2,16 @@
  * @name YouTubeLinkCollector
  * @author ProGraMajster
  * @description Zbiera linki YouTube przez otwartą wyszukiwarkę i jej przyciski stron; checkpointy, odzyskiwanie, TXT/CSV/JSON.
- * @version 1.2.5
+ * @version 1.2.7
  */
 "use strict";
 
 // This file is both the distribution and the canonical source. No build step.
 const NAME = "YouTubeLinkCollector";
-const VERSION = "1.2.5";
+const VERSION = "1.2.7";
 const SCHEMA = 1;
 const LIMITS = Object.freeze({records: 50000, messages: 250000, bytes: 24 * 1024 * 1024});
-const DEFAULTS = Object.freeze({mode: "unique", canonicalTXT: true, embeds: true, search: true, pageDelayMinSeconds: 3, pageDelayMaxSeconds: 30});
+const DEFAULTS = Object.freeze({mode: "unique", canonicalTXT: true, embeds: true, search: true, pageDelayMinSeconds: 3, pageDelayMaxSeconds: 30, pageLoadTimeoutSeconds: 90});
 const STATUSES = new Set(["idle", "running", "partial", "interrupted", "failed", "complete", "unknown"]);
 const COVERAGES = new Set(["unknown", "partial", "interrupted", "failed", "complete"]);
 const ID = /^[1-9]\d{16,19}$/;
@@ -104,6 +104,11 @@ function choosePageDelay(config, random = Math.random) {
     const {pageDelayMinSeconds: min, pageDelayMaxSeconds: max} = pageDelayRange(config);
     return min + Math.floor(random() * (max - min + 1));
 }
+function pageLoadTimeout(config) {
+    const seconds = config?.pageLoadTimeoutSeconds ?? DEFAULTS.pageLoadTimeoutSeconds;
+    if (!Number.isSafeInteger(seconds) || seconds < 15 || seconds > 300) throw new Error("Limit oczekiwania na wyniki: podaj całe sekundy od 15 do 300.");
+    return seconds;
+}
 function freshState(selection = null, config = DEFAULTS) {
     return {
         schemaVersion: SCHEMA, pluginVersion: VERSION, selection: selection ? normalizeSelection(selection) : null,
@@ -130,7 +135,7 @@ function validateSnapshot(raw, limits = LIMITS) {
     const state = freshState(raw.selection, raw.config);
     if (!STATUSES.has(raw.status) || !COVERAGES.has(raw.completeness?.status)) throw new Error("Nieprawidłowy status zapisu.");
     if (raw.config?.mode && !["all", "unique"].includes(raw.config.mode)) throw new Error("Nieprawidłowy tryb deduplikacji.");
-    state.config = {mode: raw.config?.mode || DEFAULTS.mode, canonicalTXT: raw.config?.canonicalTXT !== false, embeds: raw.config?.embeds !== false, search: raw.config?.search !== false, ...pageDelayRange(raw.config)};
+    state.config = {mode: raw.config?.mode || DEFAULTS.mode, canonicalTXT: raw.config?.canonicalTXT !== false, embeds: raw.config?.embeds !== false, search: raw.config?.search !== false, ...pageDelayRange(raw.config), pageLoadTimeoutSeconds: pageLoadTimeout(raw.config)};
     state.status = raw.status;
     state.startedAt = iso(raw.startedAt);
     state.updatedAt = iso(raw.updatedAt) || now();
@@ -155,6 +160,14 @@ function validateSnapshot(raw, limits = LIMITS) {
         state.checkpoint[field] = value || null;
     }
     state.checkpoint.searchCursor = Number.isSafeInteger(raw.checkpoint?.searchCursor) && raw.checkpoint.searchCursor >= 0 ? raw.checkpoint.searchCursor : null;
+    if (raw.checkpoint?.runMode != null) {
+        if (!["auto", "local"].includes(raw.checkpoint.runMode)) throw new Error("Nieprawidłowy tryb wznowienia.");
+        state.checkpoint.runMode = raw.checkpoint.runMode;
+    }
+    if (raw.checkpoint?.exportFormat != null) {
+        if (!["txt", "csv", "json"].includes(raw.checkpoint.exportFormat)) throw new Error("Nieprawidłowy format wznowienia.");
+        state.checkpoint.exportFormat = raw.checkpoint.exportFormat;
+    }
     state.completeness = {status: raw.completeness.status, reason: str(raw.completeness.reason, 1000), evidence: raw.completeness.evidence || null};
     state.warnings = Array.isArray(raw.warnings) ? raw.warnings.slice(-20).map(x => str(x, 1000)) : [];
     state.errors = Array.isArray(raw.errors) ? raw.errors.slice(-20).map(x => str(x, 1000)) : [];
@@ -536,6 +549,7 @@ class SearchTracker {
                 pages.add(page.key);
                 const ids = page.signature ? page.signature.split(",") : [];
                 if (ids.length !== page.messageCount || ids.some(id => !validId(id)) || new Set(ids).size !== ids.length || page.status === "processed" && !iso(page.processedAt)) throw new Error("Niespójny podpis odczytu strony.");
+                if (page.excludedIDs != null && (!Array.isArray(page.excludedIDs) || page.excludedIDs.length > 250 || new Set(page.excludedIDs).size !== page.excludedIDs.length || page.excludedIDs.some(id => !validId(id) || !ids.includes(id)))) throw new Error("Niespójne wyniki spoza wybranego kanału.");
             }
             if (!(scope.reportedTotal === null || Number.isSafeInteger(scope.reportedTotal) && scope.reportedTotal >= 0) || !(scope.totalPages === null || Number.isSafeInteger(scope.totalPages) && scope.totalPages > 0 && scope.totalPages <= 100000) || !(scope.currentPage === null || Number.isSafeInteger(scope.currentPage) && scope.currentPage > 0 && scope.currentPage <= 100000)) throw new Error("Uszkodzone liczniki wyszukiwania.");
             if (scope.navigation != null) {
@@ -593,7 +607,10 @@ class SearchTracker {
         const page = this.observe(search);
         if (!page || !search.loaded || search.messages.length > 250) return false;
         if (search.pageNumber !== null && page.number !== search.pageNumber) return false;
-        const ids = [...new Set(search.messages.map(x => x.id))].sort();
+        const excluded = search.excludedMessages || [];
+        if (excluded.some(x => !validId(x.id) || !validId(x.channel_id) || x.channel_id === this.collection.state.selection.channelID) || search.messages.length + excluded.length > 250) { page.status = "recheck"; return false; }
+        const ids = [...new Set([...search.messages, ...excluded].map(x => x.id))].sort();
+        if (ids.length !== search.messages.length + excluded.length) { page.status = "recheck"; return false; }
         if (search.messages.some(message => {
             if (message.channel_id !== this.collection.state.selection.channelID || typeof message.content !== "string" || message.embeds != null && !Array.isArray(message.embeds)) return true;
             const links = extractMessage(message, this.collection.state.config.embeds);
@@ -612,10 +629,12 @@ class SearchTracker {
         const confirmed = manuallyConfirmed || search.fullPage === true || page.source === "user-confirmed" && page.signature === signature;
         // Never equate seeing a page number with reading its messages.
         if (!ids.length && !(search.fullPage && search.reportedTotal === 0)) { page.status = "recheck"; return false; }
-        if (page.signature === signature && page.status === (confirmed ? "processed" : "visible-only")) return false;
+        const excludedIDs = excluded.map(x => x.id).sort();
+        if (page.signature === signature && JSON.stringify(page.excludedIDs || []) === JSON.stringify(excludedIDs) && page.status === (confirmed ? "processed" : "visible-only")) return false;
         const previous = JSON.stringify(page);
         page.status = confirmed ? "processed" : "visible-only";
         page.signature = signature; page.messageCount = ids.length;
+        if (excludedIDs.length) page.excludedIDs = excludedIDs; else delete page.excludedIDs;
         page.processedAt = now(); page.source = manuallyConfirmed ? "user-confirmed" : search.source;
         return previous !== JSON.stringify(page);
     }
@@ -638,8 +657,12 @@ class SearchTracker {
     }
     accounting(scope = this.active()) {
         const ids = new Set((scope?.pages || []).filter(page => page.status === "processed").flatMap(page => page.signature.split(",").filter(Boolean)));
+        const excluded = new Set((scope?.pages || []).filter(page => page.status === "processed").flatMap(page => page.excludedIDs || []));
+        // A later read in the selected channel takes precedence over an old exclusion.
+        for (const id of excluded) if (this.collection.seen.has(id)) excluded.delete(id);
         let withLinks = 0, withoutLinks = 0, unverified = 0;
         for (const id of ids) {
+            if (excluded.has(id)) continue;
             const fingerprint = this.collection.seen.get(id);
             if (fingerprint === "[]") { withoutLinks++; continue; }
             try {
@@ -649,7 +672,7 @@ class SearchTracker {
             unverified++;
         }
         const progress = this.summary(scope);
-        return {read: ids.size, withLinks, withoutLinks, unverified,
+        return {read: ids.size - excluded.size, reviewed: ids.size, outsideChannel: excluded.size, withLinks, withoutLinks, unverified,
             allPages: !!scope?.totalPages && !progress.missing.length && !progress.recheck.length && progress.processed === scope.totalPages,
             reportedTotal: scope?.reportedTotal ?? null};
     }
@@ -730,6 +753,11 @@ function localizedCount(text) {
     if (!match) return null;
     const value = Number(match[1].replace(/\D/g, "")); return Number.isSafeInteger(value) ? value : null;
 }
+function messageShape(value, channelID) {
+    return {object: !!value && typeof value === "object", validID: validId(value?.id), channelPresent: typeof value?.channel_id === "string", channelMatches: value?.channel_id === channelID, contentType: typeof value?.content, embedsType: value?.embeds == null ? "absent" : Array.isArray(value.embeds) ? "array" : "other", hit: value?.hit === true ? "true" : value?.hit === false ? "false" : "absent", messageType: Number.isSafeInteger(value?.type) ? value.type : null};
+}
+function pageIDs(search) { return [...search.messages, ...(search.excludedMessages || [])].map(x => x.id).sort().join(","); }
+function pageEvidence(search) { return JSON.stringify([search.messages.map(x => [x.id,x.content,x.embeds]), (search.excludedMessages || []).map(x => [x.id,x.channel_id])]); }
 class LocalAdapter {
     constructor(api, doc = document, loc = location) {
         this.api = api; this.document = doc; this.location = loc; this.stores = {};
@@ -758,16 +786,29 @@ class LocalAdapter {
         const current = this.selection();
         if (current.channelID !== selection.channelID || current.serverID !== selection.serverID) throw new Error("Zmieniono otwarty kanał. Otwórz wybrany kanał i wznów kolekcję.");
     }
-    resolve(messageID, channelID) {
+    resolve(messageID, channelID, allowOtherChannels = false) {
+        this.resolveDiagnostics = {candidates: [], mounted: false, fiber: false};
         for (const store of [this.stores.MessageStore, this.stores.SearchMessageStore]) {
             if (typeof store?.getMessage !== "function") continue;
             for (const args of [[channelID, messageID], [messageID, channelID], [messageID]]) {
                 try {
                     const message = store.getMessage(...args);
-                    if (message?.id === messageID && message.channel_id === channelID) return message;
+                    if (message?.id === messageID && this.resolveDiagnostics.candidates.length < 6) this.resolveDiagnostics.candidates.push(messageShape(message, channelID));
+                    if (message?.id === messageID && validId(message.channel_id) && (message.channel_id === channelID || allowOtherChannels) && typeof message.content === "string" && (message.embeds == null || Array.isArray(message.embeds))) return message;
                 } catch { /* Guarded unstable Discord store signatures. */ }
             }
         }
+        // A hit may have left a store while its complete message is still mounted.
+        // Reuse committed-fiber resolution; do not accept DOM text as a full record.
+        try {
+            const node = this.document.querySelector?.(`[id="message-content-${messageID}"]`);
+            let fiber = node && committedFiber(this.api.ReactUtils?.getInternalInstance?.(node));
+            this.resolveDiagnostics.mounted = !!node; this.resolveDiagnostics.fiber = !!fiber;
+            for (let i = 0; fiber && i < 24; i++, fiber = committedFiber(fiber.return)) {
+                const message = fiber.memoizedProps?.message;
+                if (message?.id === messageID && validId(message.channel_id) && (message.channel_id === channelID || allowOtherChannels) && typeof message.content === "string" && (message.embeds == null || Array.isArray(message.embeds))) return message;
+            }
+        } catch { /* An unresolved message must continue to block page completion. */ }
         return null;
     }
     domMessage(root, selection, messageID) {
@@ -841,13 +882,28 @@ class LocalAdapter {
         const totalPages = pagination ? Math.max(1, Math.ceil(pagination.totalCount / size)) : positive(props.totalPages);
         const payload = Array.isArray(props.messages) ? props.messages : safe(legacy,"getSearchResults",id) ?? props.searchResults;
         const groups = Array.isArray(payload) ? payload : Array.isArray(payload?.messages) ? payload.messages : null;
-        const messages = new Map(); let unresolved = 0, expected = null;
+        const messages = new Map(), excluded = new Map(), unresolvedReasons = {}, unresolvedDetails = []; let unresolved = 0, expected = null, recovered = 0;
+        const completeRecord = message => validId(message?.id) && validId(message.channel_id) && typeof message.content === "string" && (message.embeds == null || Array.isArray(message.embeds));
+        const completeMessage = message => validId(message?.id) && message.channel_id === selection.channelID && typeof message.content === "string" && (message.embeds == null || Array.isArray(message.embeds));
         if (groups) {
             const flat = groups.flat(2).filter(x => x?.hit !== false); expected = flat.length;
             for (const value of flat) {
-                const message = typeof value === "string" ? this.resolve(value, selection.channelID) : value;
-                if (validId(message?.id) && message.channel_id === selection.channelID && typeof message.content === "string" && (message.embeds == null || Array.isArray(message.embeds))) messages.set(message.id, message);
-                else unresolved++;
+                // Deferred React hit objects can be incomplete even while the same
+                // exact ID is already complete in a mounted client message store.
+                // Resolve only IDs supplied by this page, never append a raw store.
+                const id = typeof value === "string" ? value : value?.id;
+                // Discord can search a whole server while one channel remains selected.
+                // A complete hit from another channel is identified, not missing. Keep
+                // only its identity for page evidence; never import its links or content.
+                const message = completeRecord(value) ? value : validId(id) ? this.resolve(id, selection.channelID, true) : null;
+                if (completeRecord(message) && message.channel_id !== selection.channelID) { excluded.set(id, {id, channel_id: message.channel_id}); continue; }
+                if (completeMessage(message)) { messages.set(message.id, message); if (message !== value) recovered++; }
+                else {
+                    unresolved++;
+                    const reason = !validId(id) ? "missing-id" : value?.channel_id && value.channel_id !== selection.channelID ? "different-channel" : message ? "incomplete-message" : "missing-in-store";
+                    unresolvedReasons[reason] = (unresolvedReasons[reason] || 0) + 1;
+                    if (unresolvedDetails.length < 3) unresolvedDetails.push({hit: messageShape(value, selection.channelID), resolution: validId(id) ? this.resolveDiagnostics : null});
+                }
             }
         } else if (root) {
             for (const node of root.querySelectorAll('[id^="message-content-"]')) {
@@ -858,18 +914,20 @@ class LocalAdapter {
         // SearchMessageStore appends until the client's onFetchStart clears it.
         // Deferred mounted props, matching offsets and page size qualify this page;
         // the store's raw array by itself is never proof of a complete current page.
-        const loaded = !busy && coherent && pageCoherent && (messages.size > 0 || expected === 0 && reportedTotal === 0);
+        const resolvedHits = messages.size + excluded.size;
+        const loaded = !busy && coherent && pageCoherent && (resolvedHits > 0 || expected === 0 && reportedTotal === 0);
         const hidden = Number(props.blockCount || 0) + Number(props.ignoreCount || 0);
         // Client props identify a page, but deferred/filtered rendering may expose fewer hits.
         const pageExpected = pagination && reportedTotal !== null && propsOffset !== null ? Math.min(size, Math.max(0, reportedTotal - propsOffset)) : null;
-        const fullPage = groups !== null && expected === messages.size && unresolved === 0 && hidden === 0 && scope.context.sort !== "nieznane" && coherent && pageCoherent && (pageExpected === null || expected === pageExpected);
+        const fullPage = groups !== null && expected === resolvedHits && unresolved === 0 && hidden === 0 && scope.context.sort !== "nieznane" && coherent && pageCoherent && (pageExpected === null || expected === pageExpected);
         const next = root?.querySelector?.('[rel="next"], [data-ytlc-next]');
         const nextDisabled = next ? next.disabled === true || next.getAttribute?.("aria-disabled") === "true" : null;
         const coherenceReason = !offsetCoherent ? "offset-store/props" : !filtersCoherent ? filterError ? "filter-format" : "filters-store/props" : !pageCoherent ? "offset-pagination/props" : null;
-        const waitReason = coherenceReason ? `Niezgodność danych strony: ${coherenceReason} (offset store=${integer(queryOffset)}, props=${propsOffset}, paginacja=${paginationOffset}).` : busy ? `Discord ładuje wyszukiwarkę lub zgłasza błąd: ${busyReasons.join(", ")}.` : !fullPage ? `Niepełny odczyt wyników: ${messages.size}/${pageExpected ?? "?"}; ukryte=${hidden}, nierozpoznane=${unresolved}; sortowanie=${scope.context.sort === "nieznane" ? "nieznane" : "rozpoznane"}.` : null;
-        this.searchDiagnostics = {...this.searchDiagnostics, coherent: coherent && pageCoherent, coherenceReason, queryOffset: integer(queryOffset), propsOffset, paginationOffset, currentPage: pagination?.currentPage ?? null, paginationBase: 1, filtersCoherent, payload: groups !== null, unresolved, pageSize: size ?? null, hidden, next: !!next, busy, busyReasons, backgroundIndexing, loaded, fullPage, readMessages: messages.size, expectedHits: pageExpected, sortKnown: scope.context.sort !== "nieznane"};
+        const waitReason = coherenceReason ? `Niezgodność danych strony: ${coherenceReason} (offset store=${integer(queryOffset)}, props=${propsOffset}, paginacja=${paginationOffset}).` : busy ? `Discord ładuje wyszukiwarkę lub zgłasza błąd: ${busyReasons.join(", ")}.` : !fullPage ? `Niepełny odczyt strony ${pageNumber ?? "?"}: rozpoznano ${resolvedHits}/${pageExpected ?? "?"} wyników; nierozpoznane: ${unresolved}, ukryte: ${hidden}.` : null;
+        this.searchDiagnostics = {...this.searchDiagnostics, coherent: coherent && pageCoherent, coherenceReason, queryOffset: integer(queryOffset), propsOffset, paginationOffset, currentPage: pagination?.currentPage ?? null, paginationBase: 1, filtersCoherent, payload: groups !== null, unresolved, unresolvedReasons, unresolvedDetails, recovered, pageSize: size ?? null, reportedTotal, totalPages, hidden, next: !!next, busy, busyReasons, backgroundIndexing, loaded, fullPage, readMessages: messages.size, expectedHits: pageExpected, sortKnown: scope.context.sort !== "nieznane"};
+        Object.assign(this.searchDiagnostics, {resolvedHits, outsideChannel: excluded.size});
         return {scope, pageNumber: coherent && pageCoherent ? pageNumber : null, pageKey: integer(offset) !== null ? `offset:${offset}` : pageNumber ? `page:${pageNumber}` : null,
-            offset, reportedTotal, totalPages, messages: [...messages.values()], loaded, loading: busy, fullPage, unresolved, waitReason,
+            offset, reportedTotal, totalPages, expectedHits: pageExpected, messages: [...messages.values()], excludedMessages: [...excluded.values()], resolvedHits, outsideChannel: excluded.size, loaded, loading: busy, fullPage, unresolved, waitReason,
             navigationReady: !!root && !!pagination && !!props.searchContext,
             lastPage: loaded && fullPage && !!pagination && pageNumber === totalPages && (nextDisabled === true || !next && totalPages === 1),
             source: groups ? "client-results" : manual?.query ? "manual-context/visible-results" : "visible-results"};
@@ -878,7 +936,11 @@ class LocalAdapter {
         if (!["next", "prev"].includes(direction)) throw new Error("Nierozpoznany kierunek nawigacji.");
         const current = this.inspectSearch(search.scope.context);
         // inspectSearch expects normalized channel/server IDs, which the scope carries.
-        if (!current?.loaded || !current.fullPage || !current.navigationReady || current.scope?.key !== search.scope.key || current.pageKey !== search.pageKey || current.pageNumber !== search.pageNumber || JSON.stringify(current.messages.map(x=>[x.id,x.content,x.embeds])) !== JSON.stringify(search.messages.map(x=>[x.id,x.content,x.embeds]))) throw new Error("Wyniki zmieniły się przed kliknięciem. Nie wykonano przejścia.");
+        if (!current?.loaded || !current.fullPage || !current.navigationReady || current.scope?.key !== search.scope.key || current.pageKey !== search.pageKey || current.pageNumber !== search.pageNumber || pageEvidence(current) !== pageEvidence(search)) {
+            const error = new Error("Wyniki zmieniły się przed kliknięciem. Nie wykonano przejścia.");
+            if (current?.scope?.key === search.scope.key && current.pageKey === search.pageKey && current.pageNumber === search.pageNumber) error.code = "PAGE_UNSTABLE_BEFORE_CLICK";
+            throw error;
+        }
         const root = this.document.querySelector('[class*="searchResultsWrap"], [data-ytlc-search]');
         const controls = [...(root?.querySelectorAll?.(`[rel="${direction}"]`) || [])];
         if (controls.length !== 1) throw new Error(`Nie znaleziono jednoznacznego przycisku ${direction === "next" ? "następnej" : "poprzedniej"} strony (rel=${direction}). Zatrzymano bez zgadywania selektorów.`);
@@ -929,11 +991,11 @@ class LocalAdapter {
     }
 }
 class UIPageNavigator {
-    constructor({stableMs = 1000, timeoutMs = 30000, maxTransitions = 10000} = {}) {
+    constructor({stableMs = 1000, timeoutMs = 30000, maxTransitions = 10000, fromBeginning = false} = {}) {
         this.stableMs = stableMs; this.timeoutMs = timeoutMs; this.maxTransitions = maxTransitions;
-        this.phase = "reading"; this.transitions = 0; this.started = null; this.candidate = null;
+        this.phase = "reading"; this.transitions = 0; this.started = null; this.candidate = null; this.fromBeginning = fromBeginning;
     }
-    signature(search) { return search.messages.map(x => x.id).sort().join(","); }
+    signature(search) { return pageIDs(search); }
     tick(search, time = Date.now()) {
         this.started ??= time;
         if (this.cancelled) return {type: "cancelled"};
@@ -942,7 +1004,7 @@ class UIPageNavigator {
         // Do not compare or commit that intermediate state. Recheck everything once
         // loading ends, and never extend the original transition timeout.
         if (this.phase === "waiting" && search?.loading === true) return time - this.started >= this.timeoutMs
-            ? {type: "error", message: "Timeout przejścia (30 s): wyszukiwarka nadal ładuje następną stronę. Kliknięcia nie ponowiono; checkpoint zachowano."}
+            ? {type: "error", message: `Timeout przejścia (${this.timeoutMs / 1000} s): wyszukiwarka nadal ładuje następną stronę. Kliknięcia nie ponowiono; checkpoint zachowano.`}
             : {type: "wait"};
         if (!search?.scope) return {type: "error", message: "Zamknięto lub nie rozpoznano wyszukiwarki. Zatrzymano automatyczne przechodzenie."};
         this.scopeKey ??= search.scope.key;
@@ -952,24 +1014,24 @@ class UIPageNavigator {
         const ids = this.signature(search);
         if (this.phase === "waiting") {
             if (search.pageNumber && search.pageNumber !== this.fromPage && search.pageNumber !== this.expectedPage) return {type: "error", message: "Strona zmieniła się poza zaplanowanym przejściem. Zatrzymano nawigację."};
-            if (search.pageNumber === this.expectedPage && search.pageKey !== this.fromKey && ids !== this.fromSignature && search.loaded && search.fullPage && search.navigationReady) {
+            if (search.pageNumber === this.expectedPage && search.pageKey !== this.fromKey && ids !== this.fromSignature && search.loaded && search.navigationReady) {
                 this.phase = "reading"; this.candidate = null; this.started = time;
-            } else if (time - this.started >= this.timeoutMs) return {type: "error", message: "Timeout przejścia (30 s): nie potwierdzono nowej, w pełni załadowanej strony. Kliknięcia nie ponowiono; linki i checkpoint zachowano."};
+            } else if (time - this.started >= this.timeoutMs) return {type: "error", message: `Timeout przejścia (${this.timeoutMs / 1000} s): nie potwierdzono nowej, w pełni załadowanej strony. Kliknięcia nie ponowiono; linki i checkpoint zachowano.`};
             else return {type: "wait"};
         }
         if (!search.pageKey || !search.pageNumber || !search.totalPages || !search.navigationReady || !search.loaded || !search.fullPage) {
             this.candidate = null;
-            return time - this.started >= this.timeoutMs ? {type: "error", message: `Timeout odczytu (30 s): ${search.waitReason || "strona jest niepełna, ładuje się lub zawiera ukryte/nierozpoznane wyniki."} Nie przechodzono dalej.`} : {type: "wait"};
+            return time - this.started >= this.timeoutMs ? {type: "error", message: `Timeout odczytu (${this.timeoutMs / 1000} s): ${search.waitReason || "strona jest niepełna, ładuje się lub zawiera ukryte/nierozpoznane wyniki."} Nie przechodzono dalej.`} : {type: "wait"};
         }
-        const signature = JSON.stringify([search.scope.key, search.pageKey, search.pageNumber, ids, search.messages.map(x => [x.content,x.embeds])]);
+        const signature = JSON.stringify([search.scope.key, search.pageKey, search.pageNumber, ids, pageEvidence(search)]);
         if (signature !== this.candidate?.signature) { this.candidate = {signature, since: time}; return {type: "wait"}; }
         if (time - this.candidate.since < this.stableMs) return {type: "wait"};
         return {type: "capture"};
     }
     afterCommit(search, time = Date.now()) {
         if (this.cancelled) return {type: "cancelled"};
-        // Start from any open page: rewind through the existing Previous control first.
-        this.rewinding ??= search.pageNumber > 1;
+        // Rewinding is an explicit operation, never an accidental resume side effect.
+        this.rewinding ??= this.fromBeginning && search.pageNumber > 1;
         if (this.rewinding && search.pageNumber === 1) this.rewinding = false;
         if (!this.rewinding && search.pageNumber === search.totalPages && search.lastPage) { this.phase = "finished"; return {type: "finish"}; }
         if (!this.rewinding && search.pageNumber >= search.totalPages) return {type:"error",message:"Paginator nie potwierdza końca zadeklarowanej ostatniej strony. Nie przechodzono poza rozpoznany zakres."};
@@ -983,19 +1045,22 @@ class UIPageNavigator {
 }
 const CSS = `
 .ytlc{box-sizing:border-box;font:14px/1.45 var(--font-primary,system-ui);color:var(--text-normal,#dbdee1);background:var(--background-secondary,#2b2d31);border:1px solid var(--background-modifier-accent,#41434a);border-radius:12px;padding:18px;min-width:0}
-.ytlc *{box-sizing:border-box}.ytlc-window{position:fixed;right:24px;bottom:24px;width:min(660px,calc(100vw - 48px));max-height:88vh;overflow:auto;z-index:1001;box-shadow:0 14px 60px #0008}
+.ytlc *{box-sizing:border-box}.ytlc [hidden]{display:none!important}.ytlc-window{position:fixed;right:24px;bottom:24px;width:min(740px,calc(100vw - 48px));height:min(790px,90vh);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;padding:0;z-index:1001;box-shadow:0 14px 60px #0008}
 .ytlc h2{font-size:20px;font-weight:700;margin:0}.ytlc h3{font-size:15px;margin:18px 0 8px}.ytlc p{margin:8px 0}.ytlc small,.ytlc-muted{color:var(--text-muted,#a5a8ae)}
 .ytlc-head,.ytlc-actions,.ytlc-controls,.ytlc-pager{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.ytlc-head{justify-content:space-between;margin-bottom:12px}
-.ytlc-window .ytlc-head{position:sticky;top:-18px;z-index:1;background:var(--background-secondary,#2b2d31);padding:6px 0;cursor:grab;touch-action:none;user-select:none}.ytlc-window .ytlc-head[data-dragging=true]{cursor:grabbing}.ytlc-title small{display:block;font-size:12px;font-weight:400;margin-top:3px}
+.ytlc .ytlc-head{margin:0;padding:16px 18px 8px;flex-shrink:0}.ytlc-window .ytlc-head{cursor:grab;touch-action:none;user-select:none}.ytlc-window .ytlc-head[data-dragging=true]{cursor:grabbing}.ytlc-title small{display:block;font-size:11px;font-weight:400;margin-top:3px}.ytlc .ytlc-title h2{font-size:18px}
 .ytlc button,.ytlc select,.ytlc input,.ytlc textarea{font:inherit;border-radius:6px;border:1px solid var(--background-modifier-accent,#41434a);color:inherit;background:var(--background-primary,#313338);padding:7px 10px;min-height:34px}
 .ytlc button{cursor:pointer}.ytlc button:disabled{opacity:.45;cursor:default}.ytlc button.ytlc-primary{background:var(--brand-500,#5865f2);border-color:transparent;color:white}.ytlc button.ytlc-danger{color:var(--text-danger,#f88)}
 .ytlc :focus-visible{outline:2px solid var(--brand-500,#5865f2);outline-offset:2px}.ytlc input[type=checkbox]{min-height:0;margin-right:6px;accent-color:var(--brand-500,#5865f2)}
-.ytlc-channel{font-weight:600}.ytlc-status{padding:10px 12px;background:var(--background-primary,#313338);border-left:3px solid #e9b45a;border-radius:6px;margin:12px 0}.ytlc-status[data-complete=true]{border-color:#43b581}
-.ytlc-status[data-search-finished=true]{border-color:#43b581}.ytlc-search-summary{padding:10px 12px;border:1px solid var(--background-modifier-accent,#41434a);border-radius:8px;margin:12px 0}.ytlc-search-summary p:first-of-type{font-weight:600}.ytlc-history-note{font-size:12px}
+.ytlc-channel{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-size:12px}.ytlc-status{font-weight:650;color:var(--text-warning,#efbb69);font-size:13px}.ytlc-status[data-complete=true]{color:#70dca4}
+.ytlc-status[data-search-finished=true]{color:#70dca4}.ytlc-search-summary{padding:12px;border:1px solid var(--background-modifier-accent,#41434a);border-radius:8px;margin:0 0 12px}.ytlc-search-summary p:first-of-type{font-weight:600}.ytlc-history-note{font-size:12px}.ytlc-search-summary p,.ytlc-page-health p{margin:5px 0}
 .ytlc-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}.ytlc-stat{padding:10px;border-radius:8px;background:var(--background-primary,#313338)}.ytlc-stat b{font-size:21px;display:block;font-variant-numeric:tabular-nums}.ytlc-stat span{font-size:12px;color:var(--text-muted,#a5a8ae)}
-.ytlc-controls input[type=search]{flex:1;min-width:160px}.ytlc-results{margin:10px 0;max-height:280px;overflow:auto;border-radius:6px;background:var(--background-primary,#313338)}.ytlc-result{padding:9px 11px;border-bottom:1px solid var(--background-modifier-accent,#41434a);overflow-wrap:anywhere}.ytlc a{color:var(--text-link,#00a8fc)}.ytlc-result small{display:block}.ytlc-pager{justify-content:space-between}
+.ytlc-controls input[type=search]{flex:1;min-width:140px;width:100%}.ytlc-results{margin:10px 0;border-radius:6px;background:var(--background-primary,#313338)}.ytlc-result{padding:10px 12px;border-bottom:1px solid var(--background-modifier-accent,#41434a);overflow-wrap:anywhere;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 12px}.ytlc a{color:var(--text-link,#00a8fc)}.ytlc-result>a{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ytlc-result small{display:block;grid-column:1/-1}.ytlc-pager{justify-content:space-between}
 .ytlc label{display:block;margin:8px 0}.ytlc summary{cursor:pointer;font-weight:600}.ytlc code{user-select:text;overflow-wrap:anywhere}.ytlc-diagnostics{white-space:pre-wrap;overflow-wrap:anywhere;min-width:0}.ytlc-notes{max-height:110px;overflow:auto;color:var(--text-warning,#efbb69)}.ytlc-error{color:var(--text-danger,#ff9393)}.ytlc-launcher{position:fixed;left:50%;top:40px;transform:translateX(-50%);z-index:999;border:0;border-radius:8px;padding:8px 12px;background:var(--brand-500,#5865f2);color:white;cursor:pointer}
-@media(max-width:500px){.ytlc-stats{grid-template-columns:repeat(2,1fr)}.ytlc-window{right:10px;bottom:10px;width:calc(100vw - 20px)}}
+.ytlc-channelbar{padding:0 18px 10px;display:flex;align-items:center;gap:8px;flex-shrink:0}.ytlc-channelbar button{font-size:12px;min-height:28px;padding:4px 8px}.ytlc-runbar{margin:0 18px 12px;padding:12px;background:var(--background-primary,#313338);border:1px solid var(--background-modifier-accent,#41434a);border-radius:9px;flex-shrink:0}.ytlc-runbar[data-phase=error]{border-color:#b85b63}.ytlc-runbar[data-phase=error] .ytlc-status{color:#ff9ba2}.ytlc-runbar[data-phase=delay] .ytlc-status{color:#b7bdff}.ytlc-run-top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.ytlc-run-top p{font-size:12px;margin:0;font-variant-numeric:tabular-nums}.ytlc progress{display:block;appearance:none;width:100%;height:6px;overflow:hidden;border:0;border-radius:8px;background:#ffffff15;margin:10px 0 12px;accent-color:var(--brand-500,#5865f2)}.ytlc progress::-webkit-progress-bar{background:#ffffff15}.ytlc progress::-webkit-progress-value{background:var(--brand-500,#5865f2);border-radius:8px}.ytlc .ytlc-activity{font-size:12px;line-height:1.4;margin:9px 0 0;color:var(--text-muted,#a5a8ae);font-variant-numeric:tabular-nums}.ytlc-runbar[data-working=true] .ytlc-activity:before{content:' ';display:inline-block;width:7px;height:7px;margin-right:7px;border-radius:50%;background:#8a94ff;animation:ytlc-pulse 1.4s infinite}@keyframes ytlc-pulse{50%{opacity:.35}}@media(prefers-reduced-motion:reduce){.ytlc-runbar .ytlc-activity:before{animation:none!important}}
+.ytlc-tabs{display:flex;gap:4px;border-bottom:1px solid var(--background-modifier-accent,#41434a);padding:0 18px;flex-shrink:0}.ytlc-tabs button{border:0;border-bottom:2px solid transparent;border-radius:5px 5px 0 0;background:transparent;min-width:0;padding:9px 12px;color:var(--text-muted,#a5a8ae)}.ytlc-tabs button[aria-selected=true]{color:var(--text-normal,#fff);border-bottom-color:var(--brand-500,#5865f2);background:#ffffff08}.ytlc-body{min-height:0;padding:16px 18px;overflow:auto;flex:1;overscroll-behavior:contain;scrollbar-gutter:stable}.ytlc-tabpanel{min-width:0}.ytlc-tabpanel>details{border-bottom:1px solid var(--background-modifier-accent,#41434a);padding:12px 0}.ytlc-tabpanel>details>summary{margin-bottom:8px}.ytlc-tabpanel .ytlc-notes{max-height:none;overflow:visible}.ytlc-page-health{padding:12px;border-radius:8px;margin-bottom:12px;background:#5865f212;border:1px solid #5865f244}.ytlc-page-health[data-blocked=true]{background:#ed424512;border-color:#b85b63}.ytlc-page-health strong{display:block}.ytlc-page-health small{display:block;margin-top:4px}.ytlc-notice{font-size:13px;line-height:1.5;overflow-wrap:anywhere}.ytlc-footer{border-top:1px solid var(--background-modifier-accent,#41434a);padding:10px 18px;display:flex;gap:8px;align-items:center;flex-shrink:0;background:var(--background-secondary,#2b2d31)}.ytlc-footer small{flex:1;min-width:0;font-size:11px}.ytlc-footer select{width:78px}.ytlc-window .ytlc-body{scrollbar-width:thin}.ytlc:not(.ytlc-window){padding:0}.ytlc:not(.ytlc-window) .ytlc-body{max-height:650px}.ytlc .ytlc-stats{margin:8px 0 12px}.ytlc-stat b{font-size:24px}.ytlc-tabpanel h3:first-child{margin-top:0}
+@media(max-width:560px){.ytlc-window{right:8px;bottom:8px;width:calc(100vw - 16px);height:94vh;max-height:94vh}.ytlc .ytlc-head{padding:10px 12px 6px}.ytlc-channelbar{padding:0 12px 8px}.ytlc-runbar{margin:0 12px 8px;padding:9px}.ytlc-tabs{padding:0 8px;gap:0}.ytlc-tabs button{flex:1;padding:8px 5px;font-size:12px}.ytlc-body{padding:12px}.ytlc-footer{padding:8px 12px}.ytlc-footer small{font-size:10px}.ytlc-stats{gap:5px}.ytlc-stat{padding:8px}.ytlc-stat b{font-size:20px}.ytlc-stat span{font-size:11px}.ytlc-actions{gap:5px}.ytlc-runbar button{padding:6px 9px;font-size:12px}.ytlc-activity{max-height:36px;overflow:hidden}}
+@media(max-height:600px){.ytlc-title small{display:none}.ytlc-channelbar{padding-bottom:5px}.ytlc .ytlc-head{padding-top:8px;padding-bottom:4px}.ytlc-runbar{padding:8px;margin-bottom:6px}.ytlc progress{margin:6px 0 8px}.ytlc .ytlc-activity{margin-top:5px}.ytlc-tabs button{padding-top:5px;padding-bottom:5px}}
 `;
 function element(tag, text, className) {
     const node = document.createElement(tag);
@@ -1046,12 +1111,39 @@ function movableWindow(root, handle, onPosition, initialPosition = null) {
     if (initialPosition) place(initialPosition.left, initialPosition.top);
     return () => { finish(); for (const [name, listener] of listeners) handle.removeEventListener(name, listener); view.removeEventListener("resize", resize); };
 }
+// Optional read-only file connection: no server, commands, credentials or eval.
+// A short-lived request created by the local CLI enables sanitized snapshots.
+class LiveDiagnostics {
+    constructor(fs, folder, snapshot, clock = Date.now) {
+        Object.assign(this, {fs, folder, snapshot, clock}); this.enabled = false;
+    }
+    start() {
+        if (this.timer || typeof this.folder !== "string" || !["readFileSync", "statSync"].every(k => typeof this.fs?.[k] === "function") || !fileCapabilities(this.fs).callbackWrite && !fileCapabilities(this.fs).promiseWrite) return;
+        this.enabled = true; this.timer = setInterval(() => { void this.poll(); }, 2000); void this.poll();
+    }
+    async poll() {
+        if (!this.enabled || this.writing) return;
+        const prefix = `${this.folder.replace(/[\\/]+$/, "")}/${NAME}`;
+        try {
+            const size = this.fs.statSync(prefix + ".debug-request.json").size;
+            if (!Number.isSafeInteger(size) || size < 1 || size > 4096) return;
+            const request = JSON.parse(String(this.fs.readFileSync(prefix + ".debug-request.json", "utf8")));
+            const time = this.clock();
+            if (request.protocol !== 1 || !/^[a-f0-9]{32}$/.test(request.nonce) || !Number.isSafeInteger(request.expiresAt) || request.expiresAt <= time || request.expiresAt > time + 1800000 || Object.keys(request).some(k => !["protocol", "nonce", "expiresAt"].includes(k))) return;
+            this.writing = true;
+            await writeCompatibleFile(this.fs, prefix + ".diagnostics.json", JSON.stringify({protocol: 1, nonce: request.nonce, expiresAt: request.expiresAt, observedAt: new Date(time).toISOString(), ...this.snapshot()}, null, 2));
+        } catch { /* Diagnostics must never stop collection or overwrite its data. */ }
+        finally { this.writing = false; }
+    }
+    stop() { this.enabled = false; clearInterval(this.timer); this.timer = null; }
+}
 class YouTubeLinkCollector {
     constructor() {
         this.collection = new Collection(); this.panels = new Set(); this.active = false;
         this.running = false; this.busy = false; this.dirty = false; this.storageBlocked = false;
         this.generation = 0; this.lastSavedAt = null; this.ioBusy = false;
         this.manualSearch = null; this.downloads = new Map(); this.fileInputs = new Map(); this.searchCandidate = null;
+        this.lastCheckAt = null; this.lastProgressAt = null; this.runStartedAt = null;
     }
     start() {
         if (this.active) return;
@@ -1067,6 +1159,14 @@ class YouTubeLinkCollector {
         const previousScope = new SearchTracker(this.collection).active();
         if (previousScope?.context.filters?.manual) this.manualSearch = {query: previousScope.context.query, page: null, total: null};
         this.adapter = new LocalAdapter(this.api);
+        this.liveDiagnostics = new LiveDiagnostics(this.fileSystem(), this.api.Plugins?.folder, () => this.diagnosticSnapshot());
+        this.liveDiagnostics.start();
+        this.heartbeatTimer = setInterval(() => {
+            if (!this.running && this.panels.size && this.collection.state.selection) {
+                try { this.liveSearch = this.adapter.inspectSearch(this.collection.state.selection); } catch { /* No client actions. */ }
+            }
+            this.renderSoon();
+        }, 1000);
         this.api.DOM?.addStyle?.(CSS);
         this.launcher = element("button", "YT • Kolektor", "ytlc-launcher");
         this.launcher.title = "Otwórz kolektor linków YouTube (Alt+Shift+Y)";
@@ -1088,7 +1188,11 @@ class YouTubeLinkCollector {
     stop() {
         if (!this.active) return;
         this.stopCollection(); this.active = false; this.generation++;
+        this.liveDiagnostics?.stop(); clearInterval(this.heartbeatTimer);
         clearInterval(this.saveTimer); clearInterval(this.pollTimer); clearTimeout(this.readTimer); clearTimeout(this.renderTimer);
+        // BetterDiscord reuses this instance on disable/enable. A cancelled timer
+        // handle must not keep renderSoon's pending-work guard permanently true.
+        this.renderTimer = null; this.readTimer = null;
         clearInterval(this.backupTimer);
         for (const [store, listener] of this.storeListeners || []) { try { store.removeChangeListener(listener); } catch { /* Client update. */ } }
         this.storeListeners = [];
@@ -1098,7 +1202,7 @@ class YouTubeLinkCollector {
         this.windowCleanup?.(); this.windowCleanup = null;
         this.launcher?.remove(); this.window?.remove(); this.window = null;
         for (const panel of this.panels) panel.root.remove();
-        this.panels.clear(); this.api.DOM?.removeStyle?.(); this.backupPath = null; this.backupCollection = null;
+        this.panels.clear(); this.settingsRoot = null; this.api.DOM?.removeStyle?.(); this.backupPath = null; this.backupCollection = null;
     }
     onSwitch() {
         if (!this.running) return;
@@ -1118,7 +1222,7 @@ class YouTubeLinkCollector {
     }
     async read() {
         if (!this.running || this.busy) return;
-        this.busy = true; const generation = this.generation, collection = this.collection;
+        this.busy = true; this.lastCheckAt = Date.now(); const generation = this.generation, collection = this.collection;
         try {
             const search = this.checkScope();
             this.liveSearch = search;
@@ -1128,17 +1232,19 @@ class YouTubeLinkCollector {
             const merged = [...new Map([...batch.messages, ...(search?.messages || [])].map(x => [x.id, x])).values()];
             const changed = await collectBatch(collection, merged, {cancelled: () => !this.running || generation !== this.generation, onProgress: () => this.renderSoon()});
             if (changed || batch.warnings.length) this.dirty = true;
+            if (changed) this.lastProgressAt = Date.now();
             if (!this.running || generation !== this.generation) return;
             if (this.navigator) {
                 const navigator = this.navigator, decision = navigator.tick(search);
                 if (decision.type === "error") { collection.fail(new Error(decision.message)); this.stopCollection(null, true); return; }
                 if (decision.type === "capture") {
                     const current = this.adapter.inspectSearch(collection.state.selection);
-                    if (!current?.loaded || !current.fullPage || !current.navigationReady || current.totalPages !== search.totalPages || current.scope?.key !== search.scope.key || current.pageKey !== search.pageKey || JSON.stringify(current.messages.map(x => [x.id,x.content,x.embeds])) !== JSON.stringify(search.messages.map(x => [x.id,x.content,x.embeds]))) return;
+                    if (!current?.loaded || !current.fullPage || !current.navigationReady || current.totalPages !== search.totalPages || current.scope?.key !== search.scope.key || current.pageKey !== search.pageKey || pageEvidence(current) !== pageEvidence(search)) return;
                     const tracker = new SearchTracker(collection); tracker.commit(current);
                     const page = tracker.active()?.pages.find(x => x.key === current.pageKey);
                     if (page?.status !== "processed") throw new Error("Nie potwierdzono odczytu wszystkich wiadomości strony. Automatyczne przejście zostało zablokowane.");
                     this.lastSearch = current;
+                    this.lastProgressAt = Date.now();
                     const action = navigator.afterCommit(current);
                     const beforeNavigation = JSON.stringify(tracker.state);
                     tracker.active().navigation = {phase: navigator.phase, fromPage: current.pageNumber, expectedPage: action.expectedPage ?? null, direction: action.direction ?? null, updatedAt: now()};
@@ -1147,11 +1253,18 @@ class YouTubeLinkCollector {
                     if (!this.save() || !this.running || generation !== this.generation || this.navigator !== navigator) return;
                     if (action.type === "error") { collection.fail(new Error(action.message)); this.stopCollection(null,true); }
                     else if (action.type === "navigate") {
-                        const ready = await this.waitNavigationDelay(choosePageDelay(collection.state.config));
+                        const ready = await this.waitNavigationDelay(navigator.delaySatisfiedForPage === current.pageKey ? 0 : choosePageDelay(collection.state.config));
                         if (!ready || !this.running || generation !== this.generation || this.navigator !== navigator) return;
+                        navigator.delaySatisfiedForPage = current.pageKey;
                         // The loading timeout starts at the UI action, after the pacing delay.
                         navigator.started = Date.now();
-                        this.adapter.navigate(current, action.direction); // Revalidates after the delay.
+                        try { this.adapter.navigate(current, action.direction); navigator.rechecks = 0; navigator.delaySatisfiedForPage = null; this.recheckNotice = null; } // Revalidates after the delay.
+                        catch (error) {
+                            if (error.code !== "PAGE_UNSTABLE_BEFORE_CLICK" || (navigator.rechecks || 0) >= 3) throw error;
+                            navigator.rechecks = (navigator.rechecks || 0) + 1;
+                            navigator.phase = "reading"; navigator.candidate = null; navigator.started = Date.now();
+                            this.recheckNotice = "Zawartość zmieniła się podczas przerwy. Ponownie sprawdzam tę stronę; nie kliknięto następnej.";
+                        }
                     }
                     else if (action.type === "finish") {
                         this.stopCollection("Zakończono przejście dostępnych stron tego wyszukiwania. Kolekcja pozostaje INCOMPLETE: indeks, pozostałe zakresy i pełna historia nie są potwierdzone.");
@@ -1165,12 +1278,12 @@ class YouTubeLinkCollector {
             if (search?.scope && search.pageKey) {
                 const tracker = new SearchTracker(collection), before = JSON.stringify(tracker.state);
                 tracker.observe(search);
-                const signature = JSON.stringify([search.scope.key, search.pageKey, search.messages.map(x => [x.id, x.content, x.embeds]), search.loaded]);
+                const signature = JSON.stringify([search.scope.key, search.pageKey, pageEvidence(search), search.loaded]);
                 const time = Date.now();
                 if (this.searchCandidate?.signature !== signature) this.searchCandidate = {signature, since: time, pageSince: this.searchCandidate?.pageKey === search.pageKey ? this.searchCandidate.pageSince : time, pageKey: search.pageKey};
                 else if (search.loaded && time - this.searchCandidate.since >= 900) {
                     const current = this.adapter.inspectSearch(collection.state.selection, this.manualSearch);
-                    if (current?.scope?.key === search.scope.key && current.pageKey === search.pageKey && current.loaded && JSON.stringify(current.messages.map(x => [x.id, x.content, x.embeds])) === JSON.stringify(search.messages.map(x => [x.id, x.content, x.embeds]))) {
+                    if (current?.scope?.key === search.scope.key && current.pageKey === search.pageKey && current.loaded && pageEvidence(current) === pageEvidence(search)) {
                         tracker.commit(search); this.lastSearch = search;
                     }
                 }
@@ -1258,7 +1371,7 @@ class YouTubeLinkCollector {
             else apply();
         } catch (error) { this.showError(error.message); }
     }
-    startCollection(resume = true) {
+    startCollection(resume = true, {mode = "local", search = null, format = "txt", fromBeginning = false} = {}) {
         if (this.running || this.ioBusy) return;
         if (this.storageBlocked) return this.showError("Uszkodzony zapis jest chroniony. Najpierw importuj poprawny JSON lub zresetuj dane.");
         const begin = () => {
@@ -1267,7 +1380,18 @@ class YouTubeLinkCollector {
                 this.adapter = new LocalAdapter(this.api);
                 if (!this.collection.state.selection) this.collection = new Collection(this.adapter.selection(), this.collection.state.config);
                 this.adapter.ensureSelected(this.collection.state.selection);
-                this.boundScope = null; this.searchCandidate = null; this.lastSearch = null; this.paused = false; this.autoFinished = false;
+                this.boundScope = search?.scope?.key || null; this.searchCandidate = null; this.lastSearch = null; this.paused = false; this.autoFinished = false; this.recheckNotice = null;
+                this.collection.state.checkpoint.runMode = mode;
+                if (mode === "auto") {
+                    this.collection.state.checkpoint.exportFormat = format;
+                    const tracker = new SearchTracker(this.collection); tracker.observe(search);
+                    const beforeNavigation = JSON.stringify(tracker.state);
+                    if (tracker.active() && Number.isSafeInteger(search.pageNumber)) tracker.active().navigation = {phase: "reading", fromPage: search.pageNumber, expectedPage: null, direction: null, updatedAt: now()};
+                    tracker.budget(beforeNavigation);
+                    this.navigator = new UIPageNavigator({fromBeginning, timeoutMs: pageLoadTimeout(this.collection.state.config) * 1000});
+                    this.autoExportFormat = format;
+                }
+                this.runStartedAt = Date.now(); this.lastProgressAt = this.runStartedAt;
                 this.collection.begin(); this.running = true; this.generation++; this.dirty = true;
                 if (!this.save()) return;
                 this.pollTimer = setInterval(() => this.scheduleRead(), 2000);
@@ -1276,19 +1400,54 @@ class YouTubeLinkCollector {
         };
         begin(); // Start and Resume both preserve records; Reset is the explicit destructive path.
     }
-    startAllPages(format = "txt") {
+    startAllPages(format = "txt", {fromBeginning = false, resume = false} = {}) {
         if (this.running || this.busy || this.ioBusy || this.storageBlocked) return;
         try {
             const selection = this.collection.state.selection || this.adapter.selection();
             this.adapter.ensureSelected(selection);
             const search = this.adapter.inspectSearch(selection);
             if (!search?.scope || !search.navigationReady || !search.totalPages) throw new Error(search?.warning || "Nie odczytano kontekstu lub paginacji otwartej wyszukiwarki. Szczegóły są w Diagnostyce.");
+            const previousScope = new SearchTracker(this.collection).active();
+            if (resume && previousScope && previousScope.key !== search.scope.key) throw new Error("Otwarta wyszukiwarka ma inne filtry lub sortowanie niż zapis. Przywróć poprzedni zakres albo rozpocznij nowy odczyt od bieżącej strony.");
             this.manualSearch = null;
-            this.startCollection(true);
-            if (!this.running) return;
-            this.navigator = new UIPageNavigator(); this.autoExportFormat = ["txt","csv","json"].includes(format) ? format : "txt";
-            this.boundScope = search.scope.key; this.renderSoon();
+            this.startCollection(true, {mode: "auto", search, fromBeginning, format: ["txt","csv","json"].includes(format) ? format : "txt"});
+            this.renderSoon();
         } catch (error) { this.showError(error.message); }
+    }
+    resumeCollection(format = this.collection.state.checkpoint.exportFormat || "txt") {
+        if (this.canResumeAuto()) this.startAllPages(format, {resume: true});
+        else this.startCollection(true);
+    }
+    canResumeAuto() { return this.collection.state.checkpoint.runMode === "auto" || this.collection.state.checkpoint.runMode == null && !!new SearchTracker(this.collection).active()?.navigation; }
+    restartAllPages(format) {
+        this.api.UI?.showConfirmationModal?.("Zbieranie od początku", "Kolektor cofnie wyszukiwarkę do strony 1. Dotychczasowe linki zostaną zachowane. Aby kontynuować obecną stronę, wybierz Anuluj i Wznów zbieranie.", {confirmText: "Od początku", cancelText: "Anuluj", danger: false, onConfirm: () => { if (this.active) this.startAllPages(format, {fromBeginning: true}); }});
+    }
+    activitySnapshot(time = Date.now()) {
+        const delay = this.navigationDelay, search = this.liveSearch, nav = this.navigator;
+        const finished = new SearchTracker(this.collection).active()?.navigation?.phase === "finished";
+        const phase = this.ioBusy ? "export" : !this.running ? this.collection.state.status === "failed" ? "error" : this.paused ? "paused" : finished ? "finished" : "stopped" : delay ? "delay" : !nav ? "local" : nav.phase === "waiting" ? "transition" : !search?.loaded || !search?.fullPage ? "loading" : nav.candidate ? "stabilizing" : "reading";
+        const titles = {export: "Przygotowuję eksport", error: "Zatrzymano po błędzie — dane zachowane", paused: "Pauza — możesz wznowić od obecnej strony", finished: "Przebieg zakończony — zebrane linki są gotowe do eksportu", stopped: this.collection.state.status === "idle" ? "Oczekuję na uruchomienie" : "Zatrzymano — Wznów kontynuuje od obecnej strony", delay: "Strona zapisana — przerwa przed przejściem", local: "Monitoruję załadowane wiadomości — bez przełączania stron", transition: "Czekam na potwierdzenie nowej strony", loading: "Czekam na pełne wyniki tej strony", stabilizing: "Sprawdzam stabilność wyników", reading: "Odczytuję bieżącą stronę"};
+        return {phase, title: titles[phase], checkedSecondsAgo: this.lastCheckAt == null ? null : Math.max(0, Math.floor((time - this.lastCheckAt) / 1000)), progressSecondsAgo: this.lastProgressAt == null ? null : Math.max(0, Math.floor((time - this.lastProgressAt) / 1000)), remainingDelaySeconds: delay ? Math.max(0, Math.ceil((delay.dueAt - time) / 1000)) : null, waitingSeconds: nav?.started == null ? 0 : Math.max(0, Math.floor((time - nav.started) / 1000)), timeoutSeconds: nav ? nav.timeoutMs / 1000 : pageLoadTimeout(this.collection.state.config)};
+    }
+    diagnosticSnapshot() {
+        let availability = "ready", scopeMatchesCheckpoint = null;
+        try {
+            const selection = this.collection.state.selection || this.adapter.selection();
+            const search = this.adapter.inspectSearch(selection), previous = new SearchTracker(this.collection).active();
+            scopeMatchesCheckpoint = previous && search?.scope ? previous.key === search.scope.key : null;
+        } catch { availability = "selection-unavailable"; }
+        const raw = this.adapter?.searchDiagnostics || {}, search = {};
+        for (const key of ["root", "props", "queryStore", "contextStore", "pagination", "busy", "backgroundIndexing", "coherent", "queryOffset", "propsOffset", "paginationOffset", "currentPage", "paginationBase", "filtersCoherent", "payload", "unresolved", "recovered", "pageSize", "reportedTotal", "totalPages", "hidden", "next", "loaded", "fullPage", "readMessages", "expectedHits", "sortKnown"]) {
+            if (typeof raw[key] === "boolean" || raw[key] === null || Number.isFinite(raw[key])) search[key] = raw[key];
+        }
+        search.busyReasons = (raw.busyReasons || []).filter(x => /^(legacy-searching|store-fetching|store-indexing|store-error|props-searching|props-indexing|props-error)$/.test(x));
+        search.unresolvedReasons = Object.fromEntries(Object.entries(raw.unresolvedReasons || {}).filter(([k,v]) => ["missing-id", "different-channel", "incomplete-message", "missing-in-store"].includes(k) && Number.isSafeInteger(v)));
+        search.unresolvedDetails = raw.unresolvedDetails || [];
+        for (const key of ["resolvedHits", "outsideChannel"]) if (Number.isSafeInteger(raw[key])) search[key] = raw[key];
+        const panels = [...this.panels].map(panel => ({connected: !!panel.root.isConnected, activeTab: ["run","links","settings","diagnostics"].includes(panel.activeTab) ? panel.activeTab : null, lastRenderedSecondsAgo: panel.lastRenderedAt == null ? null : Math.max(0, Math.floor((Date.now() - panel.lastRenderedAt) / 1000)), error: panel.renderError || null}));
+        const reason = this.collection.state.completeness.reason;
+        const errorCode = this.collection.state.status !== "failed" ? null : /Timeout przejścia/.test(reason) ? "TRANSITION_TIMEOUT" : /Timeout odczytu/.test(reason) ? "READ_TIMEOUT" : /zapisu|checkpointu/.test(reason) ? "CHECKPOINT_ERROR" : /zakres|sortowanie|filtry/.test(reason) ? "SCOPE_CHANGED" : /Wyniki zmieniły/.test(reason) ? "PAGE_CHANGED" : "OTHER";
+        return {plugin: NAME, version: VERSION, active: this.active, running: this.running, status: this.collection.state.status, errorCode, availability, scopeMatchesCheckpoint, panels, activity: this.activitySnapshot(), counts: this.collection.stats(), checkedMessages: this.collection.seen.size, search, stores: Object.fromEntries(Object.entries(this.adapter?.stores || {}).map(([name, value]) => [name, !!value]))};
     }
     recover(name, exportOnly = false) {
         if (this.running || this.busy || this.ioBusy) return;
@@ -1449,7 +1608,10 @@ class YouTubeLinkCollector {
         finally { this.ioBusy = false; this.renderSoon(); }
     }
     disableBackup() { clearInterval(this.backupTimer); this.backupPath = null; this.backupCollection = null; this.renderSoon(); }
-    getSettingsPanel() { return this.buildPanel(false); }
+    getSettingsPanel() {
+        if (!this.settingsRoot) this.settingsRoot = this.buildPanel(false);
+        return this.settingsRoot;
+    }
     openWindow() {
         if (this.window?.isConnected) { this.window.querySelector("button")?.focus(); return; }
         this.window = this.buildPanel(true); document.body.append(this.window);
@@ -1460,9 +1622,9 @@ class YouTubeLinkCollector {
         const root = element("section", null, `ytlc${windowed ? " ytlc-window" : ""}`);
         root.setAttribute("aria-label", "Kolektor linków YouTube");
         if (windowed) { root.setAttribute("role", "dialog"); root.setAttribute("aria-modal", "false"); }
-        const panel = {root, page: 0, query: "", duplicates: false, resultRevision: -1};
+        const panel = {root, page: 0, query: "", duplicates: false, resultRevision: -1, activeTab: "run", scrollPositions: {}};
         const head = element("div", null, "ytlc-head"), title = element("div", null, "ytlc-title"); title.append(element("h2", "YouTube Link Collector"));
-        if (windowed) title.append(element("small", "Przeciągnij pasek tytułu, aby przesunąć okno"));
+        title.append(element("small", `v${VERSION} · ProGraMajster${windowed ? " · przeciągnij nagłówek, aby przesunąć" : ""}`));
         head.append(title);
         const button = (text, action, className) => {
             const node = element("button", text, className); node.type = "button"; node.addEventListener("click", action); return node;
@@ -1492,7 +1654,7 @@ class YouTubeLinkCollector {
         panel.start = button("Start", () => this.startCollection(true), "ytlc-primary");
         panel.pause = button("Pauza", () => this.pauseCollection());
         panel.stop = button("Stop", () => this.stopCollection());
-        panel.resume = button("Wznów", () => this.startCollection(true));
+        panel.resume = button("Wznów zbieranie", () => this.resumeCollection(panel.format?.value));
         panel.reset = button("Reset", () => this.reset(), "ytlc-danger");
         actions.append(panel.select, panel.start, panel.pause, panel.stop, panel.resume, panel.reset); root.append(actions);
         panel.status = element("div", null, "ytlc-status"); panel.status.setAttribute("role", "status"); panel.status.setAttribute("aria-live", "polite"); root.append(panel.status);
@@ -1526,6 +1688,7 @@ class YouTubeLinkCollector {
         const exports = element("div", null, "ytlc-actions"); panel.exportButtons = [];
         panel.format = element("select"); panel.format.setAttribute("aria-label", "Format eksportu");
         for (const value of ["txt", "csv", "json"]) { const option = element("option", value.toUpperCase()); option.value = value; panel.format.append(option); }
+        panel.format.value = this.collection.state.checkpoint.exportFormat || "txt";
         const save = button("Eksportuj", () => { void this.export(panel.format.value); }, "ytlc-primary"); panel.exportButtons.push(save);
         panel.import = button("Import JSON", () => { void this.importJSON(); });
         const checkpoint = button("Zapisz punkt wznowienia", () => { this.dirty = true; this.save(); }); panel.checkpoint = checkpoint;
@@ -1562,60 +1725,142 @@ class YouTubeLinkCollector {
         });
         delayControls.append(panel.delaySave);
         settings.append(delayControls);
+        const timeoutLabel = element("label", "Limit ładowania / odczytu strony (s) ");
+        panel.loadTimeout = element("input"); panel.loadTimeout.type = "number"; panel.loadTimeout.min = "15"; panel.loadTimeout.max = "300"; panel.loadTimeout.step = "1"; panel.loadTimeout.style.width = "90px";
+        panel.loadTimeout.setAttribute("aria-label", "Limit ładowania strony w sekundach");
+        timeoutLabel.append(panel.loadTimeout);
+        panel.timeoutSave = button("Zapisz limit", () => {
+            if (this.running || this.busy || this.storageBlocked) return;
+            try { this.collection.state.config.pageLoadTimeoutSeconds = pageLoadTimeout({pageLoadTimeoutSeconds: Number(panel.loadTimeout.value)}); this.dirty = true; this.save(); }
+            catch (error) { this.showError(error.message); }
+            this.renderSoon();
+        });
+        settings.append(timeoutLabel, panel.timeoutSave, element("p", "Limit ładowania jest niezależny od przerwy między stronami. Niepełnych wyników nie pomijamy. Po błędzie Wznów ponownie sprawdza obecną stronę, bez cofania."));
+        panel.fromBeginning = button("Zbierz od początku…", () => this.restartAllPages(panel.format.value));
+        panel.newScope = button("Nowy zakres od bieżącej strony", () => this.startAllPages(panel.format.value));
+        settings.append(panel.fromBeginning, panel.newScope, element("p", "Nowy zakres przyjmuje aktualne filtry i zachowuje dotychczasowe linki. Tryb ręczny poniżej odczytuje tylko załadowane wiadomości; nie przełącza stron."), panel.start);
         settings.append(element("p", "Dane pozostają lokalnie w BdApi.Data: adresy, identyfikatory wiadomości, nazwa autora i czas. Wtyczka nie przechowuje tokenów ani pełnych treści wiadomości. Limit: 50 000 wystąpień, 250 000 wiadomości i 24 MiB na punkt zapisu. Zapis co 15 s oraz przy zatrzymaniu. Nagłe zamknięcie może utracić ostatnią niezapisaną partię.", "ytlc-muted")); root.append(settings);
         const diagnostics = element("details"); diagnostics.append(element("summary", "Diagnostyka")); panel.diagnostics = element("p", "", "ytlc-diagnostics"); diagnostics.append(panel.diagnostics);
+        diagnostics.append(button("Kopiuj raport diagnostyczny", () => { void this.copyLinks(JSON.stringify({observedAt: now(), ...this.diagnosticSnapshot()}, null, 2)); }));
         panel.notes = element("div", null, "ytlc-notes"); panel.notes.setAttribute("role", "log"); diagnostics.append(panel.notes);
         // Main actions and results stay visible; technical/recovery controls are collapsed.
         const mainActions = element("div",null,"ytlc-actions");
-        panel.collectAll = button("Zbierz wszystkie strony", () => this.startAllPages(panel.format.value), "ytlc-primary");
+        panel.collectAll = button("Zbieraj od bieżącej strony", () => {
+            if (this.canResumeAuto()) this.resumeCollection(panel.format.value);
+            else this.startAllPages(panel.format.value);
+        }, "ytlc-primary");
         panel.progress = element("p"); panel.progress.setAttribute("aria-live","polite");
+        panel.runProgress = element("progress"); panel.runProgress.setAttribute("aria-label", "Potwierdzone strony wyszukiwania"); panel.runProgress.style.width = "100%";
+        panel.activity = element("p", null, "ytlc-activity"); panel.activity.setAttribute("aria-live", "off");
         panel.notice = element("p",null,"ytlc-muted");
         panel.searchSummary = element("div", null, "ytlc-search-summary");
         panel.searchSummary.append(element("strong", "Wiadomości z wybranego wyszukiwania"));
         panel.readCount = element("p"); panel.linkCounts = element("p"); panel.accountingNote = element("p", null, "ytlc-muted");
         panel.searchSummary.append(panel.readCount, panel.linkCounts, panel.accountingNote);
         panel.historyNote = element("p", null, "ytlc-muted ytlc-history-note");
-        mainActions.append(panel.collectAll, panel.start, panel.pause, panel.stop, panel.format, save);
+        mainActions.append(panel.collectAll, panel.pause, panel.stop, panel.format, save);
         const history = element("details"); history.append(element("summary","Historia skanowania"),panel.scanning,panel.coverage,panel.scopeSelect,manual,panel.confirmPage,help);
         const recovery = element("details"); recovery.append(element("summary","Kopie, import i odzyskiwanie"),panel.import,checkpoint,backups,fallback);
         panel.recoverySelect = element("select"); panel.recoverySelect.setAttribute("aria-label","Dostępne checkpointy do odzyskania");
         panel.recover = button("Odtwórz wybrany zapis",()=>this.recover(panel.recoverySelect.value));
         panel.recoverExport = button("Eksportuj wybrany zapis JSON",()=>this.recover(panel.recoverySelect.value,true));
         panel.recoveryInfo = element("p"); recovery.append(panel.recoveryInfo,panel.recoverySelect,panel.recoverExport,panel.recover);
-        settings.append(panel.select,panel.reset);
+        settings.append(panel.reset);
+        const channelControls = element("div", null, "ytlc-channelbar"); channelControls.append(panel.channel, panel.select);
         const mainStats = element("div",null,"ytlc-stats");
         const collectionLabel = element("strong", "Linki YouTube w całej kolekcji");
         for (const key of ["occurrences","unique","duplicates"]) mainStats.append(panel.stats[key].parentElement);
         const otherStats = element("div",null,"ytlc-stats");
         for (const key of ["messages","batches","malformed"]) otherStats.append(panel.stats[key].parentElement);
         history.append(otherStats);
-        root.replaceChildren(head,panel.channel,panel.status,panel.progress,mainActions,panel.notice,panel.searchSummary,collectionLabel,mainStats,panel.historyNote,controls,panel.copyVisible,duplicateLabel,panel.results,pager,panel.saved,history,recovery,settings,diagnostics);
-        this.panels.add(panel); this.renderPanel(panel); return root;
+        // One scrolling body, with persistent controls above and export below it.
+        // All tabs reuse the existing collection/actions; no second controller.
+        panel.runbar = element("div", null, "ytlc-runbar");
+        const runTop = element("div", null, "ytlc-run-top"); runTop.append(panel.status, panel.progress);
+        mainActions.replaceChildren(panel.collectAll,panel.pause,panel.stop);
+        panel.runbar.append(runTop,panel.runProgress,mainActions,panel.activity);
+        panel.health = element("div", null, "ytlc-page-health"); panel.health.setAttribute("role", "status");
+        panel.healthTitle = element("strong"); panel.healthCounts = element("p"); panel.healthHelp = element("small");
+        panel.health.append(panel.healthTitle,panel.healthCounts,panel.healthHelp);
+        panel.notice.className = "ytlc-notice";
+        const runBody = element("div", null, "ytlc-tabpanel");
+        const limits = element("details"); limits.append(element("summary", "Zakres i kompletność danych"),panel.historyNote,panel.accountingNote);
+        runBody.append(panel.health,panel.notice,mainStats,panel.searchSummary,limits,history);
+        const linksBody = element("div", null, "ytlc-tabpanel");
+        linksBody.append(element("h3", "Zebrane linki"),controls,duplicateLabel,panel.copyVisible,panel.results,pager);
+        const settingsBody = element("div", null, "ytlc-tabpanel"); settings.open = true;
+        settingsBody.append(settings,recovery);
+        const diagnosticBody = element("div", null, "ytlc-tabpanel"); diagnostics.open = true; diagnosticBody.append(diagnostics);
+        panel.body = element("div", null, "ytlc-body"); panel.tabs = {}; panel.tabpanels = {};
+        const tabs = element("div", null, "ytlc-tabs"); tabs.setAttribute("role", "tablist"); tabs.setAttribute("aria-label", "Widok kolektora");
+        const serial = this.panelSequence = (this.panelSequence || 0) + 1;
+        for (const [key,label,body] of [["run","Zbieranie",runBody],["links","Linki",linksBody],["settings","Ustawienia",settingsBody],["diagnostics","Diagnostyka",diagnosticBody]]) {
+            const tab = button(label, () => this.setPanelTab(panel,key)); tab.id = `ytlc-tab-${serial}-${key}`; body.id = `ytlc-view-${serial}-${key}`;
+            tab.setAttribute("role","tab"); tab.setAttribute("aria-controls",body.id); body.setAttribute("role","tabpanel"); body.setAttribute("aria-labelledby",tab.id);
+            tab.addEventListener("keydown", event => {
+                const keys = Object.keys(panel.tabs), index = keys.indexOf(key);
+                const target = event.key === "Home" ? 0 : event.key === "End" ? keys.length - 1 : event.key === "ArrowRight" ? (index + 1) % keys.length : event.key === "ArrowLeft" ? (index + keys.length - 1) % keys.length : null;
+                if (target === null) return; event.preventDefault(); this.setPanelTab(panel,keys[target]); panel.tabs[keys[target]].focus();
+            });
+            panel.tabs[key] = tab; panel.tabpanels[key] = body; tabs.append(tab); panel.body.append(body);
+        }
+        const footer = element("div", null, "ytlc-footer"); save.className = "ytlc-export";
+        footer.append(panel.saved,panel.format,save);
+        root.replaceChildren(head,channelControls,panel.runbar,tabs,panel.body,footer);
+        this.setPanelTab(panel,"run");
+        this.panels.add(panel); this.renderPanelSafely(panel); return root;
+    }
+    setPanelTab(panel, key) {
+        if (!panel.tabs[key]) return;
+        panel.scrollPositions[panel.activeTab] = panel.body.scrollTop;
+        panel.activeTab = key;
+        for (const name of Object.keys(panel.tabs)) { const selected = name === key; panel.tabs[name].setAttribute("aria-selected",String(selected)); panel.tabs[name].tabIndex = selected ? 0 : -1; panel.tabpanels[name].hidden = !selected; }
+        panel.body.scrollTop = panel.scrollPositions[key] || 0;
     }
     renderSoon() {
         if (!this.active || this.renderTimer) return;
         this.renderTimer = setTimeout(() => {
             this.renderTimer = null;
-            for (const panel of this.panels) {
-                if (!panel.root.isConnected) { this.panels.delete(panel); continue; }
-                this.renderPanel(panel);
-            }
+            this.refreshPanels();
         }, 180);
+    }
+    refreshPanels() {
+        for (const panel of this.panels) {
+            // BetterDiscord may detach a settings node before mounting it again.
+            // Keep its registration until explicit close/stop, rather than freezing
+            // a subsequently remounted view forever. Only two panels are retained.
+            if (panel.root.isConnected) this.renderPanelSafely(panel);
+        }
+    }
+    renderPanelSafely(panel) {
+        try { this.renderPanel(panel); panel.lastRenderedAt = Date.now(); panel.renderError = null; }
+        catch (error) {
+            const line = /YouTubeLinkCollector\.plugin\.js:(\d+):(\d+)/.exec(error.stack || "");
+            panel.renderError = {name: ["TypeError","RangeError","Error"].includes(error.name) ? error.name : "Error", line: line ? Number(line[1]) : null};
+            panel.status.textContent = this.running ? "Zbieranie trwa · błąd widoku" : "Błąd odświeżania widoku";
+            panel.stop.disabled = panel.pause.disabled = !this.running;
+            panel.collectAll.disabled = this.running || this.busy || this.ioBusy || this.storageBlocked;
+            panel.activity.textContent = "Panel ponowi odświeżenie. Stop nadal zatrzymuje zbieranie; dane są zachowane.";
+            panel.root.dataset.renderError = "true";
+        }
+        if (!panel.renderError) delete panel.root.dataset.renderError;
     }
     renderPanel(panel) {
         const collection = this.collection, state = collection.state, stats = collection.stats();
         const statusNames = {idle: "Gotowy", running: "Zbieranie lokalne — zakres częściowy", partial: "Kolekcja częściowa", interrupted: "Kolekcja przerwana", failed: "Błąd kolekcji", complete: "Zakres historii zakończony według importu bota", unknown: "Kompletność nieznana"};
-        panel.channel.textContent = state.selection ? `${state.selection.serverName} / #${state.selection.channelName} · ${state.selection.channelID}` : "Nie wybrano kanału";
+        panel.channel.textContent = state.selection ? `${state.selection.serverName} / #${state.selection.channelName}` : "Wybierz kanał, z którego chcesz zebrać linki";
+        panel.channel.title = state.selection ? `Kolekcja tego kanału · ${state.selection.channelID}` : "";
         panel.status.textContent = this.navigator ? "Zbieranie wszystkich stron" : statusNames[state.status];
         panel.status.dataset.complete = String(state.completeness.status === "complete");
         const values = {messages: state.progress.messagesProcessed, occurrences: stats.totalOccurrences, unique: stats.uniqueResources, duplicates: stats.duplicates, batches: state.progress.batchesProcessed, malformed: state.progress.malformedMessages};
         for (const key of Object.keys(values)) panel.stats[key].textContent = values[key].toLocaleString("pl-PL");
-        panel.saved.textContent = this.storageBlocked ? "Zapis zablokowany: chroniony uszkodzony stan." : `${this.dirty ? "Są niezapisane zmiany. " : ""}Ostatni zapis w tej sesji: ${this.lastSavedAt ? new Date(this.lastSavedAt).toLocaleTimeString("pl-PL") : "—"}`;
+        panel.saved.textContent = this.storageBlocked ? "Zapis zablokowany" : this.dirty ? "Zapisywanie zmian…" : this.lastSavedAt ? `Zapisano ${new Date(this.lastSavedAt).toLocaleTimeString("pl-PL")}` : "Dane lokalne · eksport całej kolekcji";
         panel.start.disabled = this.running || this.busy || this.ioBusy || this.storageBlocked;
         panel.stop.disabled = !this.running;
         panel.pause.disabled = !this.running;
         if (this.paused) panel.status.textContent = "Pauza · dane zapisane";
         const tracker = new SearchTracker(collection), scope = tracker.state.scopes.find(x => x.key === panel.scopeKey) || tracker.active(), progress = tracker.summary(scope);
+        const live = this.liveSearch?.scope?.context.channelID === state.selection?.channelID && this.liveSearch?.scope?.context.serverID === state.selection?.serverID && (!scope || this.liveSearch.scope.key === scope.key) ? this.liveSearch : null;
         const scopeKey = JSON.stringify(tracker.state.scopes.map(x => x.key));
         if (panel.scopesKey !== scopeKey) {
             panel.scopesKey = scopeKey; panel.scopeSelect.replaceChildren();
@@ -1629,28 +1874,47 @@ class YouTubeLinkCollector {
         const compress = numbers => { const segments = []; let start, end; for (const n of numbers.slice(0, 100000)) { if (start == null) start = end = n; else if (n === end + 1) end = n; else { segments.push(start === end ? String(start) : `${start}–${end}`); start = end = n; } } if (start != null) segments.push(start === end ? String(start) : `${start}–${end}`); return segments.slice(0, 30).join(", ") + (segments.length > 30 ? ", …" : ""); };
         panel.scanning.textContent = `Zakres: ${scope ? `${scope.context.query || JSON.stringify(scope.context.filters)} · sortowanie: ${scope.context.sort}` : "nieznany"}. Strona Discorda: ${scope?.currentPage || "nieznana"}. Wyniki zgłoszone: ${scope?.reportedTotal ?? "nieznane"}. Strony odczytane: ${progress.processed} / ${denominator}; w tym ręcznie potwierdzone: ${progress.userConfirmed || 0}; zaobserwowane: ${progress.observed}. Zapisane komunikaty błędów: ${state.errors.length}; nieprawidłowe wiadomości: ${state.progress.malformedMessages}.`;
         const accounting = tracker.accounting(scope);
-        const countMismatch = accounting.allPages && accounting.reportedTotal !== null && accounting.read !== accounting.reportedTotal;
+        const countMismatch = accounting.allPages && accounting.reportedTotal !== null && accounting.reviewed !== accounting.reportedTotal;
         const traversalFinished = !this.running && state.status !== "failed" && accounting.allPages && scope?.navigation?.phase === "finished";
         const searchFinished = traversalFinished && !accounting.unverified && !countMismatch;
         if (searchFinished) panel.status.textContent = "Odczyt wyszukiwania zakończony";
         else if (traversalFinished) panel.status.textContent = "Odczyt wymaga sprawdzenia";
+        else if (!this.running && state.status !== "failed" && scope?.navigation?.phase === "finished") panel.status.textContent = "Dotarto do końca — wcześniejsze strony wymagają odczytu";
         panel.status.dataset.searchFinished = String(searchFinished);
         const outstanding = [compress(progress.missing), progress.recheck.slice(0,30).join(", ")].filter(Boolean).join("; ");
         panel.coverage.textContent = `Strony wybranego wyszukiwania: ${accounting.allPages ? "wszystkie potwierdzone" : "odczyt częściowy"}. Potwierdzone: ${compress(progress.confirmed) || "brak"}. Do odczytu lub sprawdzenia: ${outstanding || (accounting.allPages ? "brak" : "numery nieznane")}. ${progress.warnings.join(" ")}`;
         panel.searchSummary.hidden = !scope;
-        panel.readCount.textContent = `Sprawdzone wiadomości: ${accounting.read.toLocaleString("pl-PL")} / ${accounting.reportedTotal?.toLocaleString("pl-PL") ?? "liczba wyników nieznana"}`;
-        panel.linkCounts.textContent = `Z linkami YouTube: ${accounting.withLinks.toLocaleString("pl-PL")} · Bez rozpoznanych linków YouTube: ${accounting.withoutLinks.toLocaleString("pl-PL")}${accounting.unverified ? ` · Bez potwierdzenia: ${accounting.unverified.toLocaleString("pl-PL")}` : ""}`;
+        panel.readCount.textContent = `Sprawdzone wyniki: ${accounting.reviewed.toLocaleString("pl-PL")} / ${accounting.reportedTotal?.toLocaleString("pl-PL") ?? "?"}`;
+        panel.linkCounts.textContent = `Wybrany kanał: ${accounting.read.toLocaleString("pl-PL")} wiadomości · z linkami: ${accounting.withLinks.toLocaleString("pl-PL")} · bez linków: ${accounting.withoutLinks.toLocaleString("pl-PL")}${accounting.outsideChannel ? ` · poza kanałem: ${accounting.outsideChannel.toLocaleString("pl-PL")}` : ""}${accounting.unverified ? ` · niepotwierdzone: ${accounting.unverified.toLocaleString("pl-PL")}` : ""}`;
         panel.accountingNote.textContent = accounting.unverified ? "Nie udało się potwierdzić odczytu części wiadomości. Nie zaliczono ich do wiadomości bez linków; sprawdź ten zakres ponownie." : countMismatch ? "Liczba sprawdzonych wiadomości różni się od licznika wyszukiwarki. Sprawdź zakres ponownie; różnica nie oznacza wiadomości bez linków." : "Wiadomości bez rozpoznanych linków YouTube zostały sprawdzone — nie są pominiętymi wynikami. Liczba wiadomości może różnić się od liczby linków: jedna wiadomość może zawierać kilka adresów.";
         panel.accountingNote.className = accounting.unverified || countMismatch ? "ytlc-error" : "ytlc-muted";
         panel.historyNote.textContent = state.completeness.status === "complete" ? "Pełna historia: potwierdzona według zaimportowanych danych bota." : "Pełna historia rozmowy: niepotwierdzona. Odczyt obejmuje wybrany zakres wyszukiwania i załadowane wiadomości. Oznaczenie INCOMPLETE w eksporcie dotyczy pełnej historii, a nie wiadomości bez linków.";
-        const live = this.running && this.liveSearch?.scope?.key === (scope?.key || this.boundScope) ? this.liveSearch : null;
         const delay = this.navigationDelay;
         const remaining = delay ? Math.max(0, Math.ceil((delay.dueAt - Date.now()) / 1000)) : null;
-        panel.progress.textContent = `Postęp: ${progress.processed}/${live?.totalPages ?? scope?.totalPages ?? "?"} stron · bieżąca: ${live?.pageNumber ?? scope?.currentPage ?? "?"}${delay ? ` · przejście na ${this.navigator?.expectedPage} za ${remaining} s` : this.navigator?.phase === "waiting" ? ` · oczekiwanie na ${this.navigator.expectedPage}` : ""}`;
-        panel.notice.textContent = state.status === "failed" ? state.completeness.reason : this.storageBlocked ? "Zapis chroniony. Rozwiń odzyskiwanie danych." : delay ? `Strona zapisana. Przerwa ${delay.seconds} s przed kliknięciem; Stop przerywa oczekiwanie.` : this.navigator ? live?.waitReason || "Checkpoint przed każdym przejściem. Pauza/Stop przerywają nawigację." : searchFinished ? "Zakończono wszystkie dostępne strony tego wyszukiwania. Zebrane linki są dostępne do eksportu." : "Otwórz wyszukiwanie dla tego kanału i zbierz strony. Na końcu zostanie wyeksportowana cała kolekcja w wybranym formacie.";
-        panel.notice.className = state.status === "failed" ? "ytlc-error" : "ytlc-muted";
+        const activity = this.activitySnapshot();
+        panel.activity.dataset.phase = activity.phase;
+        panel.runbar.dataset.phase = activity.phase; panel.runbar.dataset.working = String(this.running || this.ioBusy);
+        panel.activity.textContent = this.running ? `${activity.title}${delay ? ` · jeszcze ${remaining} s` : ` · odczyt ${activity.checkedSecondsAgo ?? "—"} s temu`}${["loading", "transition", "stabilizing"].includes(activity.phase) ? ` · ${activity.waitingSeconds}/${activity.timeoutSeconds} s` : ""}` : activity.title;
+        panel.runProgress.max = live?.totalPages ?? scope?.totalPages ?? 1; panel.runProgress.value = progress.processed;
+        panel.progress.textContent = `${progress.processed}/${live?.totalPages ?? scope?.totalPages ?? "?"} stron · otwarta ${live?.pageNumber ?? scope?.currentPage ?? "?"}`;
+        panel.health.hidden = !live;
+        panel.health.dataset.blocked = String(!!live && !live.fullPage && !live.loading);
+        panel.healthTitle.textContent = live ? `Strona ${live.pageNumber ?? "?"} · ${live.loading ? "Discord ładuje wyniki" : live.fullPage ? "wszystkie wyniki rozpoznane" : "odczyt wymaga uzupełnienia"}` : "Brak otwartej wyszukiwarki";
+        panel.healthCounts.textContent = live ? `Rozpoznane: ${live.resolvedHits ?? live.messages.length}/${live.expectedHits ?? "?"} · w tym kanale: ${live.messages.length}${live.outsideChannel ? ` · w innych kanałach: ${live.outsideChannel}` : ""}${live.unresolved ? ` · nieodczytane: ${live.unresolved}` : ""}` : "";
+        panel.healthHelp.textContent = live?.outsideChannel ? "Wyszukiwarka obejmuje inne kanały. Ich wyniki są rozpoznane i wyłączone z tej kolekcji. Aby zbierać tylko ten kanał, dodaj filtr „w: / in:” w Discordzie." : live?.unresolved ? "To faktycznie nierozpoznane wyniki, a nie wiadomości bez linków. Strona nie została zaliczona. Możesz ponowić odczyt; zebrane linki pozostają bezpieczne." : "Zbieram linki tylko z kanału wskazanego nad paskiem postępu. Wznowienie zaczyna od otwartej strony.";
+        panel.notice.hidden = state.status !== "failed" && !this.storageBlocked && !this.recheckNotice;
+        panel.notice.textContent = state.status === "failed" ? live?.fullPage ? "Poprzednia próba została zatrzymana. Bieżąca strona jest już rozpoznana — wybierz Wznów zbieranie. Dotychczasowe linki i checkpoint są zachowane." : `${live?.waitReason || state.completeness.reason} Zbieranie zatrzymano; dane zachowane. Wznów ponownie sprawdzi otwartą stronę, bez cofania.` : this.storageBlocked ? "Zapis chroniony. Otwórz Ustawienia → Kopie, import i odzyskiwanie." : this.recheckNotice || "";
+        panel.notice.className = state.status === "failed" ? "ytlc-notice ytlc-error" : "ytlc-notice ytlc-muted";
+        panel.tabs.links.textContent = `Linki (${stats.totalOccurrences.toLocaleString("pl-PL")})`;
+        if (this.running) panel.status.textContent = delay ? `Przerwa · ${remaining} s` : activity.phase === "loading" ? "Odczyt strony" : activity.phase === "transition" ? "Zmiana strony" : "Zbieranie w toku";
+        else if (state.status === "failed") panel.status.textContent = live?.fullPage ? "Zatrzymano · można wznowić" : "Zatrzymano · sprawdź odczyt";
         panel.collectAll.disabled = this.running || this.busy || this.ioBusy || this.storageBlocked;
-        panel.start.textContent = collection.records.size ? "Wznów odczyt" : "Start odczytu";
+        panel.collectAll.textContent = this.canResumeAuto() ? "Wznów zbieranie" : "Zbieraj od bieżącej strony";
+        if (this.running) panel.collectAll.textContent = "Zbieranie w toku";
+        panel.start.textContent = "Odczyt ręczny bez zmiany stron";
+        panel.fromBeginning.disabled = panel.newScope.disabled = this.running || this.busy || this.ioBusy || this.storageBlocked;
+        panel.loadTimeout.disabled = panel.timeoutSave.disabled = this.running || this.busy || this.storageBlocked;
+        if (panel.root.ownerDocument?.activeElement !== panel.loadTimeout) panel.loadTimeout.value = String(pageLoadTimeout(state.config));
         const candidates = this.persistence?.recovery || [], recoveryKey = candidates.map(x=>`${x.name}:${x.generation}:${x.totalOccurrences}`).join("|");
         if (panel.recoveryKey !== recoveryKey) {
             panel.recoveryKey = recoveryKey; panel.recoverySelect.replaceChildren();
@@ -1716,5 +1980,5 @@ class YouTubeLinkCollector {
         }
     }
 }
-YouTubeLinkCollector.Core = Object.freeze({NAME, VERSION, SCHEMA, LIMITS, DEFAULTS, pageDelayRange, choosePageDelay, ID, validId, byteSize, parseYouTubeURL, extractText, extractMessage, validateSnapshot, Collection, Persistence, UIPageNavigator, LocalAdapter, readSearchProps, contextSearchID, localizedCount, SearchTracker, searchScope, stableContext, collectBatch, exportData, csvCell, filename, writeExportFile, writeCompatibleFile, readCompatibleFile, fileCapabilities, dialogPath, ExportIO, protectEmptyConfig, digest, iso, now, movableWindow});
+YouTubeLinkCollector.Core = Object.freeze({NAME, VERSION, SCHEMA, LIMITS, DEFAULTS, pageDelayRange, pageLoadTimeout, choosePageDelay, ID, validId, byteSize, parseYouTubeURL, extractText, extractMessage, validateSnapshot, Collection, Persistence, UIPageNavigator, LocalAdapter, readSearchProps, contextSearchID, localizedCount, SearchTracker, searchScope, stableContext, collectBatch, exportData, csvCell, filename, writeExportFile, writeCompatibleFile, readCompatibleFile, fileCapabilities, dialogPath, ExportIO, protectEmptyConfig, digest, iso, now, movableWindow, LiveDiagnostics});
 module.exports = YouTubeLinkCollector;

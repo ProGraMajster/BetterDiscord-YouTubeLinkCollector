@@ -1,0 +1,27 @@
+Synthetic browser fixtures; these are not native Discord screenshots/tests.
+
+AUTOMATION BROWSER reenable: 12/12 PASS
+PASS Zapis przetworzonej strony przed istniejącą akcją UI
+PASS Zapis kierunku i oczekiwanej strony
+PASS Zapis przetworzonej strony przed istniejącą akcją UI
+PASS Zapis kierunku i oczekiwanej strony
+PASS Przejście do końca bez niezamierzonego cofania
+PASS Bailout React i filtry z iframe pozostają zgodne
+PASS Wszystkie 19 wystąpień bez dubli od powrotu
+PASS Wszystkie trzy strony przetworzone
+PASS Automatyczny TXT obejmuje pełną kolekcję
+PASS Koniec zatrzymuje nawigację
+PASS Pełna historia nie jest deklarowana
+PASS Panel po wyłącz/włącz odświeżył postęp i licznik
+
+AUTOMATION BROWSER foreign: 7/7 PASS
+PASS Zapis przetworzonej strony przed istniejącą akcją UI
+PASS Zapis kierunku i oczekiwanej strony
+PASS Strona 6 z 24+1 wynikami i strona 7 spoza kanału zostały rozpoznane
+PASS Dokładnie jedno Next, bez cofania
+PASS Kolekcja i TXT zawierają tylko 149 linków wybranego kanału
+PASS Wyniki spoza kanału nie są nieodczytane ani bez linków
+PASS Checkpoint przechowuje wyłączenia po ponownym odczycie
+
+Manual UI checks: four tabs; keyboard End/Home selects diagnostics/collection; 520x680 viewport has no horizontal panel overflow and footer remains visible. Single active scrolling body; viewport override reset.
+Missing-message scenario: a true 24/25 read remains unconfirmed, preserves 24 links and presents an explicit error; no Next click.

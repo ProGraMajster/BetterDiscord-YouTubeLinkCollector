@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nawigacja UI • fixture 1.2.5</title>
+<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nawigacja UI • fixture 1.2.6</title>
 <style>body{margin:0;padding:104px 24px 80px;font:14px/1.5 system-ui;background:#1e1f22;color:#dbdee1}.fixture-header{position:fixed;top:32px;left:0;right:0;height:50px;padding-left:24px;display:flex;align-items:center;background:#17181b}main{max-width:800px;margin:auto}section.fixture-search,pre{padding:12px;background:#17181b;margin-bottom:12px;border-radius:8px}button{cursor:pointer}pre{white-space:pre-wrap}#fixture-pagination{position:fixed;bottom:0;right:0;width:400px;padding:16px;background:#17181b}</style></head><body><header class="fixture-header"># muzyka · test</header><main>
 <p>Test kontraktu klienta w przeglądarce. Syntetyczne dane i BdApi; to nie jest działający Discord.</p>
 <section class="fixture-search" data-ytlc-search><strong>Otwarta wyszukiwarka</strong><div id="fixture-page"></div><div id="fixture-messages"></div><nav id="fixture-pagination"><button rel="prev">Poprzednia strona</button><button rel="next">Następna strona</button></nav></section>
-<div id="mount"></div><pre id="test-report">Wybierz „Zbierz wszystkie strony” w panelu.</pre></main>
+<div id="mount"></div><pre id="test-report">Wybierz „Zbieraj od bieżącej strony” w panelu.</pre></main>
 <script>
 window.module={exports:{}};
 const parameters=new URLSearchParams(location.search),scenario=parameters.get("scenario")||"normal";
@@ -13,10 +13,11 @@ const values=new Map(),savedFiles=new Map(),clicks=[],checks=[];
 window.require=name=>{if(name!=="fs")throw Error("Unexpected dependency");return{
  writeFile:(path,text,options,cb)=>{savedFiles.set(path,text);cb(null);},rename:(a,b,cb)=>{savedFiles.set(b,savedFiles.get(a));savedFiles.delete(a);cb(null);},
  unlink:(path,cb)=>{savedFiles.delete(path);cb(null);},readFile:(path,encoding,cb)=>cb(null,savedFiles.get(path)),stat:(path,cb)=>cb(null,{size:new TextEncoder().encode(savedFiles.get(path)).length})};};
-const total=scenario==="summary"?148:19,size=scenario==="summary"?25:7;
+const total=scenario==="resume"?1250:scenario==="summary"?148:scenario==="foreign"?175:scenario==="missing"?25:19,size=["resume","summary","foreign","missing"].includes(scenario)?25:7;
 const messages=Array.from({length:total},(_,i)=>({id:String(333333333333333333n+BigInt(i)),channel_id:channelID,content:scenario==="summary"&&i>=121?"Załączony film bez adresu YouTube":`https://youtu.be/V${String(scenario==="summary"&&i<4?i+4:i).padStart(10,"0")}`,embeds:[],author:{username:"Źródło"},timestamp:"2026-10-10T10:00:00Z"}));
-const filters={channel_id:[channelID],sort_by:"timestamp",sort_order:"asc"},props={searchContext:{type:"GUILD",guildId:guildID},search:{},messages:[],searchResultsQuery:filters,searchMode:"oldest",blockCount:0,ignoreCount:0};
-const pagination={currentPage:scenario==="normal"?2:1,pageSize:size,totalCount:total};
+if(scenario==="foreign")for(let i=149;i<total;i++)messages[i].channel_id="999999999999999999";
+const filters={...(scenario==="foreign"?{}:{channel_id:[channelID]}),sort_by:"timestamp",sort_order:"asc"},props={searchContext:{type:"GUILD",guildId:guildID},search:{},messages:[],searchResultsQuery:filters,searchMode:"oldest",blockCount:0,ignoreCount:0};
+const pagination={currentPage:scenario==="resume"?19:scenario==="foreign"?6:1,pageSize:size,totalCount:total};
 const root=document.querySelector("[data-ytlc-search]"),next=root.querySelector('[rel="next"]'),prev=root.querySelector('[rel="prev"]');
 // Reproduce React's shared-child bailout: return pointers still point to the
 // old parent, while the committed root uses its alternate with fresh props.
@@ -33,7 +34,22 @@ root.append(Object.assign(document.createElement("div"),{className:"embed loadin
 const stores={SelectedChannelStore:{getChannelId:()=>channelID},ChannelStore:{getChannel:()=>({id:channelID,guild_id:guildID,name:"muzyka",type:0})},GuildStore:{getGuild:()=>({name:"Serwer testowy"})},PermissionStore:{can:()=>true},MessageStore:{getMessages:()=>({_array:[]})},SearchQueryStore:{getSearchResultsQueryString:()=>"in:muzyka youtube.com",getSearchResultsQuery:()=>filters,getSearchResultsOffset:()=>offset,getSearchMode:()=>"oldest"},SelectedSearchContextStore:{getSelectedSearchContext:()=>props.searchContext},SearchMessageStore:{getIsFetching:()=>loading,getIsIndexing:()=>false,getIsHistoricalIndexing:()=>true,getTotalCount:()=>loading?0:total,getMessage:id=>messages.find(m=>m.id===id)}};
 window.BdApi=class{constructor(name){this.Data={load:key=>structuredClone(values.get(key)),save:(key,value)=>values.set(key,structuredClone(value)),delete:key=>values.delete(key)};this.Webpack={getStore:name=>stores[name]};this.ReactUtils={getInternalInstance:element=>element===root?fiber:buttonFiber};this.DOM={addStyle:css=>{const style=document.createElement("style");style.id=name;style.textContent=css;document.head.append(style);},removeStyle:()=>document.getElementById(name)?.remove()};this.UI={showToast:()=>{},showConfirmationModal:(title,text,options)=>options.onConfirm(),openDialog:async options=>({canceled:false,filePath:`/memory/automatic.${options.filters[0].extensions[0]}`})};}};
 </script><script src="/plugin.js"></script><script>
-const Plugin=module.exports,plugin=new Plugin();plugin.start();plugin.selectChannel();plugin.collection.state.config.pageDelayMinSeconds=0;plugin.collection.state.config.pageDelayMaxSeconds=0;document.getElementById("mount").append(plugin.getSettingsPanel());
+const Plugin=module.exports,plugin=new Plugin();plugin.start();plugin.selectChannel();
+if(scenario==="reenable"){plugin.renderSoon();plugin.stop();plugin.start();}
+plugin.collection.state.config.pageDelayMinSeconds=0;plugin.collection.state.config.pageDelayMaxSeconds=0;document.getElementById("mount").append(plugin.getSettingsPanel());
+let resumeClicks=0,pauseClicks=0,clicksAtResume=0,resumePage=null;
+if(["resume","foreign"].includes(scenario)){
+ const tracker=new Plugin.Core.SearchTracker(plugin.collection);
+ const completed=scenario==="resume"?18:5;
+ for(let page=0;page<completed;page++){show(page);const search=plugin.adapter.inspectSearch(plugin.collection.state.selection);for(const message of search.messages)plugin.collection.process(message);tracker.commit(search);}
+ show(completed);plugin.collection.state.checkpoint.runMode="auto";tracker.active().navigation={phase:"interrupted",fromPage:completed,expectedPage:completed+1,direction:"next",updatedAt:new Date().toISOString()};plugin.collection.fail(Error(`Syntetyczny timeout na stronie ${completed+1}`));plugin.dirty=true;plugin.save();
+ const panel=[...plugin.panels][0];panel.collectAll.addEventListener("click",()=>{resumeClicks++;clicksAtResume=clicks.length;resumePage=pagination.currentPage;});panel.pause.addEventListener("click",()=>pauseClicks++);
+}
+if(scenario==="missing"){
+ const getMessage=stores.SearchMessageStore.getMessage;stores.SearchMessageStore.getMessage=id=>id===messages[24].id?null:getMessage(id);
+ props.messages=[...messages.slice(0,24),{id:messages[24].id}];
+ plugin.collection.state.config.pageLoadTimeoutSeconds=15;plugin.collection.fail(Error("Timeout odczytu: rozpoznano 24/25 wyników. Dane zachowane."));plugin.renderSoon();
+}
 if(scenario==="summary"){plugin.collection.fail(Error("Wyniki zmieniły się przed kliknięciem. Nie wykonano przejścia."));plugin.collection.interrupt();plugin.renderSoon();}
 if(scenario==="summary"){
  const controls=document.createElement("p");controls.id="summary-controls";
@@ -51,20 +67,43 @@ for(const [button,direction] of [[next,"next"],[prev,"prev"]])button.addEventLis
  if(scenario==="timeout"){show(page,false,true);return;}
  show(page,true);setTimeout(()=>show(page,false),scenario==="stop"?5000:400);
 });
-let started=false,done=false,stoppedAt=null;
+let started=false,done=false,stoppedAt=null,uiFinishAt=null;
 const report=document.getElementById("test-report");
 const monitor=setInterval(()=>{try{
  if(plugin.running)started=true;
  if(!started||done)return;
  report.textContent=`Scenariusz: ${scenario}\nKliknięcia: ${clicks.join(", ")||"brak"}\nStan: ${plugin.collection.state.status}\nLinki: ${plugin.collection.records.size}\n${scenario==="stop"?"Po pierwszym kliknięciu wybierz Stop.":"Oczekiwanie na wynik testu…"}`;
- if(scenario==="normal"&&plugin.autoFinished&&savedFiles.has("/memory/automatic.txt")){
-  check("Przewinięcie do początku i przejście do końca",clicks.join(",")==="prev,next,next");
+ if(scenario==="foreign"&&plugin.autoFinished&&savedFiles.has("/memory/automatic.txt")){
+  const a=new Plugin.Core.SearchTracker(plugin.collection).accounting();
+  check("Strona 6 z 24+1 wynikami i strona 7 spoza kanału zostały rozpoznane",a.allPages&&a.reviewed===175&&a.outsideChannel===26&&a.read===149);
+  check("Dokładnie jedno Next, bez cofania",clicks.join(",")==="next");
+  check("Kolekcja i TXT zawierają tylko 149 linków wybranego kanału",plugin.collection.records.size===149&&savedFiles.get("/memory/automatic.txt").trim().split(/\r?\n/).length===149);
+  check("Wyniki spoza kanału nie są nieodczytane ani bez linków",a.unverified===0&&a.withoutLinks===0);
+  check("Checkpoint przechowuje wyłączenia po ponownym odczycie",new Plugin.Core.SearchTracker(new Plugin.Core.Persistence(plugin.api.Data).load()).accounting().outsideChannel===26);
+  done=true;
+ }else if(["normal","reenable"].includes(scenario)&&plugin.autoFinished&&savedFiles.has("/memory/automatic.txt")){
+  if(scenario==="reenable"){
+   const panel=[...plugin.panels][0],ready=panel.progress.textContent.includes("3/3")&&panel.tabs.links.textContent.includes("19")&&panel.status.textContent.includes("zakończony");
+   uiFinishAt??=Date.now();if(!ready){if(Date.now()-uiFinishAt>5000)throw Error("Panel nie odświeżył się w ciągu 5 s od zakończenia");return;}
+  }
+  check("Przejście do końca bez niezamierzonego cofania",clicks.join(",")==="next,next");
   check("Bailout React i filtry z iframe pozostają zgodne",plugin.adapter.searchDiagnostics.coherent===true&&plugin.adapter.searchDiagnostics.coherenceReason===null);
   check("Wszystkie 19 wystąpień bez dubli od powrotu",plugin.collection.records.size===19);
   check("Wszystkie trzy strony przetworzone",new Plugin.Core.SearchTracker(plugin.collection).summary().processed===3);
   check("Automatyczny TXT obejmuje pełną kolekcję",savedFiles.get("/memory/automatic.txt").trim().split("\r\n").length===19);
   check("Koniec zatrzymuje nawigację",!plugin.running&&!plugin.navigator);
   check("Pełna historia nie jest deklarowana",plugin.collection.state.completeness.status!=="complete");done=true;
+  if(scenario==="reenable"){
+   const panel=[...plugin.panels][0];check("Panel po wyłącz/włącz odświeżył postęp i licznik",panel.progress.textContent.includes("3/3")&&panel.tabs.links.textContent.includes("19")&&panel.status.textContent.includes("zakończony"));
+  }
+ }else if(scenario==="resume"&&pauseClicks>=1&&resumeClicks>=2&&clicks.length>clicksAtResume){
+  const panel=[...plugin.panels][0];panel.stop.click();
+  check("Wznowienie po błędzie i po Pauzie używa przycisku automatycznego",resumeClicks>=2);
+  check("Żadne kliknięcie nie cofa strony",clicks.every(x=>x==="next"));
+  check("Wznowienie ponownie odczytało stronę otwartą podczas Pauzy",new Plugin.Core.SearchTracker(plugin.collection).active().pages.some(p=>p.number===resumePage&&p.status==="processed"));
+  check("Zachowano pierwsze 18 stron",new Plugin.Core.SearchTracker(plugin.collection).summary().confirmed.includes(1)&&new Plugin.Core.SearchTracker(plugin.collection).summary().confirmed.includes(18));
+  check("Checkpoint pamięta tryb automatyczny",new Plugin.Core.Persistence(plugin.api.Data).load().state.checkpoint.runMode==="auto");
+  check("Stop wyłącza nawigację i oczekiwanie",!plugin.running&&!plugin.navigator&&!plugin.navigationDelay);done=true;
  }else if(scenario==="summary"&&plugin.autoFinished&&savedFiles.has("/memory/automatic.txt")&&!plugin.renderTimer){
   const panel=[...plugin.panels][0],a=new Plugin.Core.SearchTracker(plugin.collection).accounting();
   check("148/148 wiadomości, 121 z linkami i 27 bez linków",a.read===148&&a.withLinks===121&&a.withoutLinks===27&&a.unverified===0&&a.allPages);

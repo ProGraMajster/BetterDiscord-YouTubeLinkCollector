@@ -1,0 +1,29 @@
+YouTube Link Collector 1.2.6 - ProGraMajster
+2026-10-16 - synthetic browser fixtures, separate from native Discord.
+
+AUTOMATION BROWSER resume: 12/12 PASS
+PASS Zapis przetworzonej strony przed istniejącą akcją UI
+PASS Zapis kierunku i oczekiwanej strony
+PASS Zapis przetworzonej strony przed istniejącą akcją UI
+PASS Zapis kierunku i oczekiwanej strony
+PASS Zapis przetworzonej strony przed istniejącą akcją UI
+PASS Zapis kierunku i oczekiwanej strony
+PASS Wznowienie po błędzie i po Pauzie używa przycisku automatycznego
+PASS Żadne kliknięcie nie cofa strony
+PASS Wznowienie ponownie odczytało stronę otwartą podczas Pauzy
+PASS Zachowano pierwsze 18 stron
+PASS Checkpoint pamięta tryb automatyczny
+PASS Stop wyłącza nawigację i oczekiwanie
+
+AUTOMATION BROWSER normal: 11/11 PASS
+PASS Zapis przetworzonej strony przed istniejącą akcją UI
+PASS Zapis kierunku i oczekiwanej strony
+PASS Zapis przetworzonej strony przed istniejącą akcją UI
+PASS Zapis kierunku i oczekiwanej strony
+PASS Przejście do końca bez niezamierzonego cofania
+PASS Bailout React i filtry z iframe pozostają zgodne
+PASS Wszystkie 19 wystąpień bez dubli od powrotu
+PASS Wszystkie trzy strony przetworzone
+PASS Automatyczny TXT obejmuje pełną kolekcję
+PASS Koniec zatrzymuje nawigację
+PASS Pełna historia nie jest deklarowana

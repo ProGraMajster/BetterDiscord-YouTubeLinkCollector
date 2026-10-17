@@ -18,7 +18,7 @@ test("1.2.0/1.2.1/1.2.2/1.2.3/1.2.4 official-bot checkpoints remain readable aft
     try {
         const data = new Collection(identity.selection); data.begin(); data.process(message(upper));
         data.state.checkpoint.before = String(upper);
-        for (const version of ["1.2.0", "1.2.1", "1.2.2", "1.2.3", "1.2.4"]) {
+        for (const version of ["1.2.0", "1.2.1", "1.2.2", "1.2.3", "1.2.4", "1.2.5", "1.2.6"]) {
             const snapshot = data.snapshot(); snapshot.pluginVersion = version;
             const file = path.join(directory, "checkpoint-"+version+".json");
             await atomicWrite(file, JSON.stringify({toolVersion: version, bot: {...cursor(), before: String(upper), snapshotUpperMessageID: String(upper)}, collection: snapshot}));

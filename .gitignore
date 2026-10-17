@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 *.config.json
+*.diagnostics.json
+*.debug-request.json
 *.csv
 *checkpoint*.json
 exports/

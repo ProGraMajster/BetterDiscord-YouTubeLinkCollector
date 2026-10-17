@@ -5,7 +5,7 @@
 
 A standalone BetterDiscord plugin by **ProGraMajster** that collects YouTube links from messages available in the client and the currently open Discord search. It uses the search panel's existing pagination buttons, verifies each loaded page, and preserves occurrences and source references in a local collection.
 
-**Current version: 1.2.5 (prerelease).** Download the installable plugin from [GitHub Releases](https://github.com/ProGraMajster/BetterDiscord-YouTubeLinkCollector/releases). The interface is currently in Polish. This is an unofficial project, unaffiliated with Discord, BetterDiscord, or YouTube.
+**Current version: 1.2.7 (prerelease).** Download the installable plugin from [GitHub Releases](https://github.com/ProGraMajster/BetterDiscord-YouTubeLinkCollector/releases/tag/v1.2.7). The interface is currently in Polish. This is an unofficial project, unaffiliated with Discord, BetterDiscord, or YouTube.
 
 ## Features
 
@@ -16,7 +16,9 @@ A standalone BetterDiscord plugin by **ProGraMajster** that collects YouTube lin
 - TXT, CSV, and JSON exports of the entire collection, independent of list filters and displayed rows.
 - Unique-resource grouping or all occurrences, with original URLs, authors, timestamps, and message references when available.
 - Separate counts for checked messages, messages with links, messages without recognized links, and unverified results.
-- A draggable panel, keyboard movement, searchable results, and expandable diagnostics.
+- A draggable panel with four tabs, persistent collection/export controls, one scrolling body, keyboard navigation, and searchable results.
+- Server-wide search hits outside the selected channel are explicitly counted, not mistaken for missing messages or imported into the channel collection.
+- Live panel updates survive disabling and re-enabling the same BetterDiscord instance.
 
 ## Installation and update
 
@@ -32,10 +34,10 @@ Before updating, stop collection and retain your full JSON export, existing plug
 
 ## Collect all search pages
 
-1. Open the desired channel or direct conversation. In **Ustawienia i prywatność**, use **Wybierz otwarty kanał** and verify the selection.
+1. Open the desired channel or direct conversation. Use **Wybierz otwarty kanał** above the progress bar and verify the selection.
 2. Open Discord search. For a server channel, set an exact `in:` filter. Search `youtube.com`, choose a consistent sort order, and remove unwanted author/date filters.
-3. Select TXT, CSV, or JSON, then choose **Zbierz wszystkie strony** (Collect all pages).
-4. The plugin reads and stabilizes the current results, saves the links and checkpoint, clicks an existing Next/Previous control, and waits for a verified new page. Starting in the middle reads that page, returns to page 1, then proceeds to the end.
+3. Select TXT, CSV, or JSON, then choose **Zbieraj od bieżącej strony** (Collect from current page), or **Wznów zbieranie** (Resume collection).
+4. The plugin reads and stabilizes the current results, saves the links and checkpoint, clicks an existing Next/Previous control, and waits for a verified new page. Collection starts on the page already open and proceeds forward. **Wznów zbieranie** rereads that page after an error or pause. Returning to page 1 requires the separate **Zbierz od początku…** action in settings and confirmation.
 5. Keep the channel, query, filters, and sort order unchanged. Their changes stop collection while preserving captured data. Use **Pauza** or **Stop** to cancel pending work; a click already delivered to Discord may finish loading.
 6. After the last available page, the plugin initiates an export of the entire collection. Canceling the save dialog preserves the collection. A download fallback confirms handoff to the browser, not a physical file saved to disk.
 7. Repeat for `youtu.be` without Reset. These are separate search scopes in the same collection. Use ordinary date filters to split searches limited by Discord's index or pagination.
@@ -46,7 +48,7 @@ Configure pacing while stopped under **Ustawienia i prywatność**: minimum/maxi
 
 Checkpoints use schema 1 and the existing `BdApi.Data` namespace, including alternate banks and readback validation. Start/Resume preserve existing records; Reset is an explicit destructive action. Periodic saving occurs every 15 seconds and when stopping or disabling the plugin. A crash can lose the latest unsaved batch.
 
-After a pause or restart, reopen the same search scope and choose **Zbierz wszystkie strony** again to resume automatic collection. Pages may be revisited; unchanged messages do not create duplicate observations. **Start odczytu / Wznów odczyt** resumes reading locally available messages and is a separate action from automatic pagination. Navigation never starts unattended after a restart.
+After a pause or restart, reopen the same search scope and choose **Wznów zbieranie** to resume automatic collection from the current page. The current page is read again; unchanged messages do not create duplicate observations. Mode and export format survive checkpoints, including errors and restarts. **Odczyt ręczny bez zmiany stron** is a separate advanced action in settings. Navigation never starts unattended after a restart.
 
 Use **Kopie, import i odzyskiwanie** for backup inspection, exporting a recovery copy, or explicitly restoring one. JSON includes all occurrences and the checkpoint; TXT/CSV cannot restore collection state. Import requires a valid compatible file and matching channel. See [Usage](docs/USAGE.md) and [architecture](docs/ARCHITECTURE.md) for details.
 
@@ -64,13 +66,15 @@ A Discord search count represents messages, not videos. A checked message withou
 
 ## Compatibility and limitations
 
-- The adapter was investigated against Discord client 1.0.9261 and the documented BetterDiscord APIs. Internal React/store/pagination contracts can change after client updates; compatibility with every build is not guaranteed.
+- The adapter was investigated against Discord client 1.0.9261 and the documented BetterDiscord APIs. Internal React/store/pagination contracts can change after client updates; compatibility with every build is not guaranteed. Missing hit objects are resolved only by the exact ID in client stores or committed mounted message props; unresolved results continue to block navigation.
 - Unsupported or inconsistent search state stops navigation with diagnostics. Clicking a button alone is never treated as proof of a successful transition.
-- The current UI was tested with synthetic BdApi/browser fixtures. It has **not been fully qualified in native BetterDiscord**, so this first GitHub release is a prerelease. See [validation evidence](docs/VALIDATION.md) and the [native test checklist](docs/MANUAL-TEST.md).
+- The 1.2.7 cross-channel stall was identified in the real client, and the user confirmed forward navigation and live UI updates after the fixes. The same-instance timer failure is also reproduced by a lifecycle regression. A full native 97-page run and the separate failure on another computer remain unverified. See [validation evidence](docs/VALIDATION.md) and the [native test checklist](docs/MANUAL-TEST.md).
 - Limits: 50,000 occurrences, 250,000 distinct messages, and 24 MiB per snapshot; whichever is reached first stops collection. Export JSON before resetting.
-- The plugin makes no custom Discord requests, reads no user token, and has no telemetry or updater. Client modification and UI automation are not approval from the platform; see [Discord's platform policy](https://discord.com/safety/platform-manipulation-policy-explainer).
+- The plugin makes no custom Discord requests, reads no user token, and has no external telemetry or updater. Optional short-lived local diagnostic files contain only sanitized counters and status; see [live diagnostics](docs/LIVE-DIAGNOSTICS.md). Client modification and UI automation are not approval from the platform; see [Discord's platform policy](https://discord.com/safety/platform-manipulation-policy-explainer).
 
 An optional, separate [registered-bot CLI](docs/BOT.md) reads permitted server-channel history using Discord's official bot API. It requires Node.js 22+, a registered bot, channel permissions, and Message Content Intent. It does not accept normal-user tokens or access DMs. The plugin does not use this CLI for UI navigation.
+
+The panel separates **Zbieranie**, **Linki**, **Ustawienia**, and **Diagnostyka**. The work stage, current-page result accounting, countdown and progress bar stay current; collection controls and export remain visible while the content scrolls. A separate page-load timeout defaults to 90 seconds (15–300 configurable), independently of pacing. If results change before a click, the same page is rechecked up to three times; a click already delivered is never retried automatically.
 
 ## Development and releases
 
@@ -83,7 +87,7 @@ npm run release:check
 npm run preview
 ```
 
-The preview at `http://127.0.0.1:8765/` uses synthetic data and BdApi substitutes. `/automation` exercises UI pagination; it is not a logged-in Discord test. [This panel preview](docs/PANEL-1.2.5.png) is explicitly synthetic, not a screenshot of a user's Discord account.
+The preview at `http://127.0.0.1:8765/` uses synthetic data and BdApi substitutes. `/automation` exercises UI pagination; it is not a logged-in Discord test. [This panel preview](docs/PANEL-1.2.7.jpg) is explicitly synthetic, not a screenshot of a user's Discord account.
 
 CI checks Windows/Linux and Node.js 22/24 without Discord credentials. Tags matching `vMAJOR.MINOR.PATCH` run validation, package the tracked public files, and publish a plugin, source/docs ZIP, and SHA-256 checksums. See [release instructions](docs/RELEASING.md). Historical technical documentation is retained in Polish.
 

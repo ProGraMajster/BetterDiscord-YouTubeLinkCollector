@@ -64,6 +64,31 @@ test("plugin start/stop is idempotent and cleans timers, DOM, styles and key lis
         assert.equal(env.listeners.size, 0); assert.equal(env.styles.size, 0); assert.equal(plugin.active, false); assert.equal(plugin.launcher.isConnected, false);
     } finally { plugin.stop(); env.restore(); }
 });
+test("re-enabling the same BetterDiscord instance updates an open panel repeatedly after a pending refresh was cancelled",async()=>{
+    const env=environment(),plugin=new Plugin();let renders=0;
+    const panel=()=>({root:{isConnected:true,dataset:{},remove(){}},renderError:null});
+    plugin.renderPanel=()=>{renders++;};
+    try{
+        plugin.start();plugin.panels.add(panel());plugin.renderSoon();
+        for(let cycle=0;cycle<3;cycle++){
+            plugin.stop();plugin.start();plugin.panels.add(panel());const before=renders;
+            plugin.renderSoon();await new Promise(resolve=>setTimeout(resolve,230));assert.equal(renders,before+1,`refresh after enable ${cycle}`);
+            plugin.renderSoon();await new Promise(resolve=>setTimeout(resolve,230));assert.equal(renders,before+2,`next refresh ${cycle}`);
+            plugin.renderSoon();
+        }
+    }finally{plugin.stop();env.restore();}
+});
+test("a temporarily detached panel remains registered and refreshes when BetterDiscord mounts it",()=>{
+    const p=new Plugin(),panel={root:{isConnected:false,dataset:{}}};let renders=0;p.panels.add(panel);p.renderPanel=()=>renders++;
+    p.refreshPanels();assert.equal(renders,0);assert.equal(p.panels.has(panel),true);
+    panel.root.isConnected=true;p.refreshPanels();assert.equal(renders,1);assert.equal(panel.renderError,null);
+});
+test("one panel render failure cannot freeze another panel or disable Stop, and the next refresh recovers",()=>{
+    const p=new Plugin();p.running=true;const make=()=>({root:{isConnected:true,dataset:{}},status:{},stop:{},pause:{},collectAll:{},activity:{}}),broken=make(),good=make();let fail=true,rendered=0;
+    p.panels.add(broken);p.panels.add(good);p.renderPanel=panel=>{if(panel===broken&&fail)throw TypeError("PRIVATE VALUE");rendered++;};
+    p.refreshPanels();assert.equal(rendered,1);assert.equal(broken.stop.disabled,false);assert.equal(broken.renderError.name,"TypeError");assert.equal(JSON.stringify(broken.renderError).includes("PRIVATE"),false);
+    fail=false;p.refreshPanels();assert.equal(rendered,3);assert.equal(broken.renderError,null);assert.equal(broken.root.dataset.renderError,undefined);
+});
 test("disable interrupts and persists a running scan without losing occurrences", () => {
     const env = environment(), plugin = new Plugin();
     try {

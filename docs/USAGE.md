@@ -1,3 +1,32 @@
+# Interfejs 1.2.7
+
+Autor: **ProGraMajster**.
+
+- **Zbieranie**: etap pracy, rozpoznane wyniki bieżącej strony, licznik wybranego kanału i wyniki z innych kanałów. Wznów ponownie odczytuje otwartą stronę i przechodzi do przodu.
+- **Linki**: wyszukiwanie, tryb unikalne/wszystkie, kopiowanie i strony listy. Lista przewija się w głównej części okna; sterowanie i eksport pozostają widoczne.
+- **Ustawienia**: przerwa między stronami, niezależny limit ładowania, opcje eksportu i odzyskiwanie.
+- **Diagnostyka**: szczegóły bieżącego stanu, wcześniejsze błędy i kopiowanie raportu bez treści rozmowy.
+
+Kolekcja dotyczy kanału wskazanego w nagłówku. Wyszukiwanie całego serwera może zwracać inne kanały. Ich kompletne wyniki są rozpoznawane i liczone osobno, a nie zapisywane do tej kolekcji. Nie są to „nieodczytane” wiadomości ani wiadomości bez linków. Aby ograniczyć wyszukiwarkę, użyj filtra kanału „w: / in:” w Discordzie. Faktycznie brakujące dane nadal zatrzymują przejście, z opisem liczby nieodczytanych wyników.
+
+Okno można przeciągać za nagłówek. Zakładki obsługują strzałki oraz Home/End. Przy małej szerokości pozostają dostępne zbieranie, Pauza/Stop i eksport.
+
+Poniżej wcześniejsza dokumentacja i opis trwałego formatu danych.
+
+# Obsługa 1.2.6 — kontynuacja od bieżącej strony
+
+Autor projektu: ProGraMajster.
+
+Główne przyciski to Zbieraj od bieżącej strony / Wznów zbieranie, Pauza, Stop i Eksportuj. Wznów działa po błędzie i po Pauzie: ponownie odczytuje stronę otwartą w Discordzie, a po potwierdzeniu przechodzi dalej. Nie cofa do strony 1. Zbierz od początku… w ustawieniach wymaga osobnego potwierdzenia i zachowuje linki.
+
+Panel pokazuje etap pracy, ostatni odczyt i postęp, zegar aktualizacji, odliczanie przerwy oraz pasek potwierdzonych stron. Zegar, który przestaje się aktualizować, wskazuje brak reakcji interfejsu. Oczekiwanie na pełne wyniki ma limit 90 s, ustawiany osobno w zakresie 15–300 s. Przerwa między stronami pozostaje 3–30 s lub własny zapisany zakres.
+
+Tryb Odczyt ręczny bez zmiany stron jest osobną opcją w ustawieniach; nie zastępuje automatycznego wznowienia. Zmiana filtrów przy próbie Wznów jest odrzucana. Aby pracować na nowym zakresie, użyj opcji Zbierz od początku… albo Nowy zakres od bieżącej strony; bieżąca kolekcja zostaje zachowana.
+
+W razie 24/25 wiadomości kolektor próbuje odczytać brakującą wiadomość po jej ID z pamięci klienta lub zatwierdzonych props zamontowanej wiadomości. Jeśli nadal jej brakuje, strona nie jest zaliczana. Raport diagnostyczny podaje liczniki i kategorię braku, bez treści/ID/adresów. [Połączenie diagnostyczne](LIVE-DIAGNOSTICS.md).
+
+Poniżej zachowano historyczny opis układu i mechanizmu 1.2.5; nazwy przycisków wznowienia i domyślne cofanie zostały zastąpione powyższym zachowaniem.
+
 # Przebieg automatycznej kolekcji 1.2.5
 
 Autor projektu: ProGraMajster.
